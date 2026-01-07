@@ -17,6 +17,7 @@ return [
         'key'    => env('SELCOM_API_KEY'),
         'secret' => env('SELCOM_API_SECRET'),
         'url'    => env('SELCOM_BASE_URL'),
+        'vendor' => env('SELCOM_VENDOR_ID'),
     ],
 
     'postmark' => [

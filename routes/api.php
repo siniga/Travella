@@ -63,7 +63,7 @@ Route::get('/selcom-test', function (SelcomService $selcom) {
     try {
         // 1. Prepare dummy order data required by Selcom
         $data = [
-            'vendor' => 'VENDORTEXT', // Replace with your actual vendor ID if needed
+            'vendor' => config('services.selcom.vendor'),
             'order_id' => uniqid(),
             'buyer_email' => 'test@example.com',
             'buyer_name'  => 'Test User',
