@@ -78,6 +78,7 @@ Route::get('/selcom-test', function (SelcomService $selcom) {
 
         // 3. Return detailed debug info
         return [
+            'sent_vendor' => $data['vendor'], // Debug: Check what vendor ID is being sent
             'status' => $response->status(),
             'body' => $response->json() ?? $response->body(),
             'raw_body' => $response->body(),
