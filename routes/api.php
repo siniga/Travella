@@ -70,6 +70,7 @@ Route::get('/selcom-test', function (SelcomService $selcom) {
             'buyer_phone' => '255700000000',
             'amount'      => 1000,
             'currency'    => 'TZS',
+            'payment_methods' => 'ALL',
             'no_of_items' => 1,
         ];
 

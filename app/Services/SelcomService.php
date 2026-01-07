@@ -76,6 +76,7 @@ class SelcomService
             'buyer_phone', 
             'amount', 
             'currency', 
+            'payment_methods',
             'no_of_items'
         ];
 
