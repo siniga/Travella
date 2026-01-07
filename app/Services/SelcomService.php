@@ -34,6 +34,14 @@ class SelcomService
 
     public function headers(array $signedFields, array $data): array
     {
+        // Filter out fields that are not present in the data to avoid mismatch
+        $signedFields = array_filter($signedFields, function ($field) use ($data) {
+            return isset($data[$field]);
+        });
+
+        // Re-index array to ensure clean implode
+        $signedFields = array_values($signedFields);
+
         $timestamp = gmdate('Y-m-d\TH:i:sP');
 
         $digest = $this->computeDigest($timestamp, $signedFields, $data);
