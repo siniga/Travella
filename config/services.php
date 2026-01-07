@@ -13,6 +13,11 @@ return [
     | a conventional file to locate the various service credentials.
     |
     */
+    'selcom' => [
+        'key'    => env('SELCOM_API_KEY'),
+        'secret' => env('SELCOM_API_SECRET'),
+        'url'    => env('SELCOM_BASE_URL'),
+    ],
 
     'postmark' => [
         'token' => env('POSTMARK_TOKEN'),

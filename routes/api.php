@@ -11,6 +11,11 @@ use App\Http\Controllers\CountryController;
 use App\Http\Controllers\BundleTypeController;
 use App\Http\Controllers\ProviderController;
 use App\Http\Controllers\OrderController;  
+use App\Services\SelcomService;
+
+
+Http::get('https://google.com')->successful();
+
 
 Route::prefix('auth')->group(function () {
   Route::post('/register', [AuthController::class, 'register']);
@@ -51,4 +56,38 @@ Route::middleware(['auth:sanctum', 'verified'])->group(function () {
   Route::get('/orders/{draft_id}', [OrderController::class, 'show']);
   Route::put('/orders/{draft_id}', [OrderController::class, 'update']);
   Route::delete('/orders/{draft_id}', [OrderController::class, 'destroy']);
+});
+
+// Http::withoutVerifying()->get('selcom-api-url');
+Route::get('/selcom-test', function (SelcomService $selcom) {
+    try {
+        // 1. Prepare dummy order data required by Selcom
+        $data = [
+            'vendor' => 'VENDORTEXT', // Replace with your actual vendor ID if needed
+            'order_id' => uniqid(),
+            'buyer_email' => 'test@example.com',
+            'buyer_name'  => 'Test User',
+            'buyer_phone' => '255700000000',
+            'amount'      => 1000,
+            'currency'    => 'TZS',
+            'no_of_items' => 1,
+        ];
+
+        // 2. Call the createOrder method
+        $response = $selcom->createOrder($data);
+
+        // 3. Return detailed debug info
+        return [
+            'status' => $response->status(),
+            'body' => $response->json() ?? $response->body(),
+            'raw_body' => $response->body(),
+            'headers' => $response->headers()
+        ];
+    } catch (\Exception $e) {
+        return [
+            'error' => true,
+            'message' => $e->getMessage(),
+            'trace' => $e->getTraceAsString()
+        ];
+    }
 });
