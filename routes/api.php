@@ -81,7 +81,7 @@ Route::get('/selcom-test', function (SelcomService $selcom) {
                 'city'      => 'Dar es Salaam',
                 'state_or_region' => 'Dar es Salaam',
                 'postcode_or_pobox' => '00000',
-                'country_code' => 'TZ',
+                'country' => 'Tanzania',
                 'phone' => '255700000000',
             ],
             'buyer_remarks' => 'None',

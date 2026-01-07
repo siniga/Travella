@@ -88,7 +88,7 @@ class SelcomService
             'billing.city',
             'billing.state_or_region',
             'billing.postcode_or_pobox',
-            'billing.country_code',
+            'billing.country',
             'billing.phone',
             'buyer_remarks',
             'merchant_remarks'
