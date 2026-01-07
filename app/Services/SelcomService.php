@@ -22,8 +22,11 @@ class SelcomService
         $signatureString = "timestamp=$timestamp";
 
         foreach ($signedFields as $field) {
-            if (isset($data[$field])) {
-                $signatureString .= "&$field=" . $data[$field];
+            // Use data_get to retrieve nested values (e.g. 'billing.firstname')
+            $value = data_get($data, $field);
+            
+            if ($value !== null) {
+                $signatureString .= "&$field=" . $value;
             }
         }
 
@@ -36,7 +39,7 @@ class SelcomService
     {
         // Filter out fields that are not present in the data to avoid mismatch
         $signedFields = array_filter($signedFields, function ($field) use ($data) {
-            return isset($data[$field]);
+            return data_get($data, $field) !== null;
         });
 
         // Re-index array to ensure clean implode
@@ -67,7 +70,6 @@ class SelcomService
     public function createOrder(array $data)
     {
         // Typical fields required for signing a create-order request
-        // Adjust this list based on exactly what fields you send in $data
         $signedFields = [
             'vendor', 
             'order_id', 
@@ -77,7 +79,19 @@ class SelcomService
             'amount', 
             'currency', 
             'payment_methods',
-            'no_of_items'
+            'redirect_url',
+            'cancel_url',
+            'no_of_items',
+            'billing.firstname',
+            'billing.lastname',
+            'billing.address_1',
+            'billing.city',
+            'billing.state_or_region',
+            'billing.postcode_or_pobox',
+            'billing.country_code',
+            'billing.phone',
+            'buyer_remarks',
+            'merchant_remarks'
         ];
 
         return $this->post('/checkout/create-order', $data, $signedFields);

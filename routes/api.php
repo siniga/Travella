@@ -71,7 +71,21 @@ Route::get('/selcom-test', function (SelcomService $selcom) {
             'amount'      => 1000,
             'currency'    => 'TZS',
             'payment_methods' => 'ALL',
+            'redirect_url' => base64_encode('https://google.com'),
+            'cancel_url'   => base64_encode('https://google.com'),
             'no_of_items' => 1,
+            'billing' => [
+                'firstname' => 'Test',
+                'lastname'  => 'User',
+                'address_1' => '123 Test St',
+                'city'      => 'Dar es Salaam',
+                'state_or_region' => 'Dar es Salaam',
+                'postcode_or_pobox' => '00000',
+                'country_code' => 'TZ',
+                'phone' => '255700000000',
+            ],
+            'buyer_remarks' => 'None',
+            'merchant_remarks' => 'None',
         ];
 
         // 2. Call the createOrder method
