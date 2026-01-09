@@ -90,20 +90,33 @@ Route::get('/selcom-test', function (SelcomService $selcom) {
 
         // 2. Call the createOrder method
         $response = $selcom->createOrder($data);
+        $body = $response->json();
 
-        // 3. Return detailed debug info
-        return [
-            'sent_vendor' => $data['vendor'], // Debug: Check what vendor ID is being sent
-            'status' => $response->status(),
-            'body' => $response->json() ?? $response->body(),
-            'raw_body' => $response->body(),
-            'headers' => $response->headers()
-        ];
+        // 3. Handle response
+        if ($response->successful() && ($body['result'] ?? '') === 'SUCCESS') {
+            $encodedUrl = $body['data'][0]['payment_gateway_url'] ?? null;
+            
+            if ($encodedUrl) {
+                return response()->json([
+                    'status' => 'success',
+                    'payment_url' => base64_decode($encodedUrl),
+                    'reference' => $body['reference'] ?? null,
+                    'transid' => $data['order_id']
+                ]);
+            }
+        }
+
+        // Return error details if something failed
+        return response()->json([
+            'status' => 'error',
+            'message' => $body['message'] ?? 'Unknown error',
+            'debug' => $body
+        ], 400);
+
     } catch (\Exception $e) {
-        return [
-            'error' => true,
-            'message' => $e->getMessage(),
-            'trace' => $e->getTraceAsString()
-        ];
+        return response()->json([
+            'status' => 'error',
+            'message' => $e->getMessage()
+        ], 500);
     }
 });
