@@ -65,14 +65,14 @@ Route::get('/selcom-test', function (SelcomService $selcom) {
         $data = [
             'vendor' => config('services.selcom.vendor'),
             'order_id' => uniqid(),
-            'buyer_email' => 'test@example.com',
+            'buyer_email' => 'peterkhamis5@gmail.com',
             'buyer_name'  => 'Test User',
-            'buyer_phone' => '255700000000',
+            'buyer_phone' => '255768632087',
             'amount'      => 1000,
             'currency'    => 'TZS',
             'payment_methods' => 'ALL',
-            'redirect_url' => base64_encode('https://google.com'),
-            'cancel_url'   => base64_encode('https://google.com'),
+            'redirect_url' => base64_encode('https://thetravela.com/return'),
+            'cancel_url'   => base64_encode('https://thetravela.com/cancel'),
             'no_of_items' => 1,
             'billing' => [
                 'firstname' => 'Test',
@@ -119,4 +119,36 @@ Route::get('/selcom-test', function (SelcomService $selcom) {
             'message' => $e->getMessage()
         ], 500);
     }
+});
+
+Route::get('/selcom-raw', function (SelcomService $selcom) {
+    $data = [
+        'vendor' => config('services.selcom.vendor'),
+        'order_id' => uniqid(),
+        'buyer_email' => 'test@example.com',
+        'buyer_name'  => 'Test User',
+        'buyer_phone' => '255700000000',
+        'amount'      => 1000,
+        'currency'    => 'TZS',
+        'payment_methods' => 'ALL',
+        'redirect_url' => base64_encode('https://google.com'),
+        'cancel_url'   => base64_encode('https://google.com'),
+        'no_of_items' => 1,
+        'billing' => [
+            'firstname' => 'Test',
+            'lastname'  => 'User',
+            'address_1' => '123 Test St',
+            'city'      => 'Dar es Salaam',
+            'state_or_region' => 'Dar es Salaam',
+            'postcode_or_pobox' => '00000',
+            'country' => 'Tanzania',
+            'phone' => '255700000000',
+        ],
+        'buyer_remarks' => 'None',
+        'merchant_remarks' => 'None',
+    ];
+
+    $response = $selcom->createOrder($data);
+
+    return $response->json();
 });
