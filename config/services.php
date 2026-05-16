@@ -25,8 +25,9 @@ return [
    ],
 
    'vodacom_sim' => [
-        'base_url' => env('VODACOM_SIM_BASE_URL'),
-        'api_key' => env('VODACOM_SIM_API_KEY'),
+        // Full origin only (e.g. https://simmanager.vodacom.co.tz) — paths include /api/...
+        'base_url' => env('VODACOM_SIM_BASE_URL', env('ESIM_MANAGER_URL')),
+        'api_key' => env('VODACOM_SIM_API_KEY', env('ESIM_MANAGER_KEY')),
    ],
 
     'postmark' => [

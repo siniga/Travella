@@ -13,6 +13,13 @@ class VodacomSimManagerService
         $baseUrl = rtrim((string) config('services.vodacom_sim.base_url'), '/');
         $apiKey = (string) config('services.vodacom_sim.api_key');
 
+        if ($baseUrl === '' || ! filter_var($baseUrl, FILTER_VALIDATE_URL)) {
+            throw new \RuntimeException(
+                'Vodacom SIM Manager is not configured: set VODACOM_SIM_BASE_URL to the full API origin '
+                .'(e.g. https://simmanager.vodacom.co.tz) in .env. Do not use a path like "api" or a Docker service name.'
+            );
+        }
+
         return Http::baseUrl($baseUrl)
             ->acceptJson()
             ->withHeaders([

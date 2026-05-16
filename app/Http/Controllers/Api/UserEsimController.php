@@ -23,19 +23,8 @@ class UserEsimController extends Controller
             ->get();
 
         return response()->json([
-            'esims' => $esims->map(function (UserEsim $assignment) {
-                return [
-                    'id' => $assignment->id,
-                    'esim_id' => $assignment->esim_id,
-                    'msisdn' => $assignment->esim?->msisdn,
-                    'network_id' => $assignment->esim?->network_id,
-                    'iccid' => $assignment->esim?->iccid,
-                    'imsi' => $assignment->esim?->imsi,
-                    'description' => $assignment->esim?->description,
-                    'status' => $assignment->esim?->status,
-                    'created_at' => $assignment->created_at,
-                ];
-            })->values(),
+            'success' => true,
+            'data' => $esims,
         ]);
     }
 
