@@ -115,7 +115,7 @@ class EvPayService
             'query' => $request->query(),
             'body' => $request->all(),
             'content' => $request->getContent(),
-            'headers' => $request->headers->all(),
+            'signature_header' => $request->header('Signature') ?? $request->header('signature'),
         ];
 
         Log::info('EvPay callback received', $rawLog);
@@ -123,7 +123,10 @@ class EvPayService
         try {
             ['payload' => $payload, 'verified' => $verified] = $this->parseCallbackPayload($request);
         } catch (\InvalidArgumentException $e) {
-            Log::warning('EvPay callback rejected', ['error' => $e->getMessage(), 'raw' => $rawLog]);
+            Log::warning('EvPay callback rejected', [
+                'error' => $e->getMessage(),
+                'body' => $request->all(),
+            ]);
 
             return [
                 'success' => false,
@@ -270,23 +273,17 @@ class EvPayService
             ];
         }
 
-        $body = $request->all();
-        if ($body !== []) {
-            return [
-                'payload' => $body,
-                'verified' => false,
-            ];
-        }
-
         $content = $request->getContent();
-        if ($content !== '' && $content !== false) {
+        if (is_string($content) && $content !== '') {
             $payload = json_decode($content, true);
             if (is_array($payload)) {
-                return [
-                    'payload' => $payload,
-                    'verified' => false,
-                ];
+                return $this->finalizeJsonCallbackPayload($request, $payload);
             }
+        }
+
+        $body = $request->all();
+        if ($body !== []) {
+            return $this->finalizeJsonCallbackPayload($request, $body);
         }
 
         throw new \InvalidArgumentException('Empty EvPay callback payload.');
@@ -294,10 +291,101 @@ class EvPayService
 
     /**
      * @param  array<string, mixed>  $payload
+     * @return array{payload: array<string, mixed>, verified: bool}
+     */
+    private function finalizeJsonCallbackPayload(Request $request, array $payload): array
+    {
+        $verified = $this->verifyEvmakCallbackSignature($request, $payload);
+
+        if (
+            ! $verified
+            && config('services.evpay.callback_require_signature')
+            && $this->callbackProvidesSignature($request, $payload)
+        ) {
+            throw new \InvalidArgumentException('Invalid EvPay callback signature.');
+        }
+
+        return [
+            'payload' => $payload,
+            'verified' => $verified,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function callbackProvidesSignature(Request $request, array $payload): bool
+    {
+        $sig = $request->header('Signature') ?? $request->header('signature') ?? ($payload['signature'] ?? null);
+
+        return is_string($sig) && $sig !== '';
+    }
+
+    /**
+     * Verify Evmak JSON webhook (Signature header / body signature field).
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function verifyEvmakCallbackSignature(Request $request, array $payload): bool
+    {
+        $provided = $request->header('Signature')
+            ?? $request->header('signature')
+            ?? ($payload['signature'] ?? null);
+
+        if (! is_string($provided) || $provided === '') {
+            return false;
+        }
+
+        $secretKey = trim((string) config('services.evpay.secret_key'));
+        if ($secretKey === '') {
+            return false;
+        }
+
+        $data = $payload;
+        unset($data['signature']);
+
+        $candidates = [
+            json_encode($data, JSON_UNESCAPED_SLASHES),
+            json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            json_encode($data),
+        ];
+
+        $sorted = $data;
+        ksort($sorted);
+        $candidates[] = json_encode($sorted, JSON_UNESCAPED_SLASHES);
+        $candidates[] = json_encode($sorted, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        $content = $request->getContent();
+        if (is_string($content) && $content !== '') {
+            $stripped = preg_replace('/,\s*"signature"\s*:\s*"[a-f0-9]+"\s*(?=\})/i', '', $content);
+            if (is_string($stripped) && $stripped !== $content) {
+                $candidates[] = $stripped;
+            }
+        }
+
+        foreach (array_unique(array_filter($candidates)) as $message) {
+            $expected = hash_hmac('sha256', $message, $secretKey);
+            if (hash_equals($expected, $provided)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
      */
     private function extractCallbackReference(array $payload): ?string
     {
-        foreach (['reference', 'payment_reference', 'orderReference', 'order_reference', 'merchantReference'] as $key) {
+        foreach ([
+            'transaction_reference',
+            'reference',
+            'payment_reference',
+            'orderReference',
+            'order_reference',
+            'merchantReference',
+        ] as $key) {
             $value = $payload[$key] ?? null;
             if (is_string($value) && $value !== '') {
                 return $value;
@@ -312,7 +400,7 @@ class EvPayService
      */
     private function extractGatewayPaymentId(array $payload): ?string
     {
-        foreach (['transaction_id', 'transactionId', 'payment_id', 'paymentId', 'gateway_payment_id', 'id'] as $key) {
+        foreach (['payment_id', 'paymentId', 'transaction_id', 'transactionId', 'gateway_payment_id', 'id'] as $key) {
             $value = $payload[$key] ?? null;
             if ($value !== null && $value !== '') {
                 return (string) $value;
@@ -335,11 +423,27 @@ class EvPayService
             ?? ''
         ));
 
-        if (in_array($status, ['paid', 'success', 'successful', 'completed', 'complete', 'approved'], true)) {
+        if (in_array($status, [
+            'paid',
+            'success',
+            'successful',
+            'completed',
+            'complete',
+            'approved',
+            'authorized',
+            'captured',
+        ], true)) {
             return true;
         }
 
-        $code = $payload['code'] ?? $payload['resultCode'] ?? $payload['responseCode'] ?? null;
+        if (filter_var($payload['success'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+            $processor = (string) ($payload['processor_response'] ?? '');
+            if ($processor === '' || $processor === '00') {
+                return true;
+            }
+        }
+
+        $code = $payload['code'] ?? $payload['resultCode'] ?? $payload['responseCode'] ?? $payload['processor_response'] ?? null;
         if ($code === 0 || $code === '0' || $code === '00') {
             return true;
         }
@@ -364,7 +468,15 @@ class EvPayService
             ?? ''
         ));
 
-        return in_array($status, ['failed', 'failure', 'cancelled', 'canceled', 'declined', 'error'], true);
+        if (in_array($status, ['failed', 'failure', 'cancelled', 'canceled', 'declined', 'error', 'rejected'], true)) {
+            return true;
+        }
+
+        if (array_key_exists('success', $payload) && $payload['success'] === false) {
+            return true;
+        }
+
+        return false;
     }
 
     private function shouldRegenerateReference(?string $reference): bool

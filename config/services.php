@@ -19,6 +19,7 @@ return [
     'checkout_url' => env('EVPAY_CHECKOUT_URL', 'https://checkout.evmak.com/checkout'),
     'return_url' => env('EVPAY_RETURN_URL', 'https://thetravela.com/dashboard'),
     'callback_url' => env('EVPAY_CALLBACK_URL'),
+    'callback_require_signature' => env('EVPAY_CALLBACK_REQUIRE_SIGNATURE', false),
    ],
 
    'fx' => [
