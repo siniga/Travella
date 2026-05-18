@@ -17,6 +17,8 @@ return [
     'merchant_id' => env('EVPAY_MERCHANT_ID'),
     'secret_key' => env('EVPAY_SECRET_KEY'),
     'checkout_url' => env('EVPAY_CHECKOUT_URL', 'https://checkout.evmak.com/checkout'),
+    'return_url' => env('EVPAY_RETURN_URL', 'https://thetravela.com/dashboard'),
+    'callback_url' => env('EVPAY_CALLBACK_URL'),
    ],
 
    'fx' => [

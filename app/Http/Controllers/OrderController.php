@@ -6,13 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreOrderRequest;
 use App\Models\Order;
 use App\Models\OrderItem;
-use App\Models\Bundle;
-use App\Models\Esim;
-use App\Models\UserEsim;
 use App\Models\Trip;
 use App\Models\Kyc;
 use App\Services\EvPayService;
-use App\Services\VodacomSimManagerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,9 +17,7 @@ class OrderController extends Controller
 {
     public function __construct(
         private readonly EvPayService $evpay,
-        private readonly VodacomSimManagerService $vodacom,
-    )
-    {
+    ) {
     }
 
     public function getOrders(): JsonResponse
@@ -62,193 +56,6 @@ class OrderController extends Controller
             'success' => true,
             'data' => $orders,
         ]);
-    }
-
-    /**
-     * FAKE / TEST ONLY: manually mark an order as paid.
-     * Remove this endpoint after testing.
-     */
-    public function paymentPaidTest(int $orderId): JsonResponse
-    {
-        $order = Order::with(['orderItems.bundle'])->findOrFail($orderId);
-
-        DB::beginTransaction();
-
-        $order->payment_gateway = $order->payment_gateway ?? 'evpay';
-        $order->payment_status = 'paid';
-        $order->status = 'paid';
-        $order->paid_at = now();
-        $order->save();
-
-        // Allocate an AVAILABLE eSIM if the user doesn't already have one.
-        $assignment = UserEsim::where('user_id', $order->user_id)->with('esim')->latest('id')->first();
-
-        if (! $assignment) {
-            $esim = Esim::where('status', 'AVAILABLE')->lockForUpdate()->first();
-
-            if (! $esim) {
-                DB::rollBack();
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No AVAILABLE eSIMs in inventory.',
-                ], 409);
-            }
-
-            // Create/provision the SIM on Vodacom first (POST /api/sims).
-            $createPayload = [
-                'msisdn' => $esim->msisdn,
-                'network_id' => (int) ($esim->network_id ?? 1),
-                'status' => 'MANAGED',
-            ];
-            $createResp = $this->vodacom->post('/api/sims', [], $createPayload);
-
-            if (! $createResp->successful()) {
-                DB::rollBack();
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Failed to create SIM on Vodacom.',
-                    'vodacom' => [
-                        'status' => $createResp->status(),
-                        'body' => $createResp->json(),
-                    ],
-                ], 502);
-            }
-
-            // Best-effort: persist sim_id if Vodacom returns one.
-            $vodacomBody = $createResp->json();
-            $vodacomSimId = data_get($vodacomBody, 'id')
-                ?? data_get($vodacomBody, 'data.id')
-                ?? data_get($vodacomBody, 'sim_id')
-                ?? data_get($vodacomBody, 'data.sim_id');
-            if ($vodacomSimId !== null && $vodacomSimId !== '') {
-                $esim->sim_id = (int) $vodacomSimId;
-            }
-
-            $assignment = UserEsim::create([
-                'user_id' => $order->user_id,
-                'esim_id' => $esim->id,
-            ]);
-
-            $esim->status = 'MANAGED';
-            $esim->save();
-
-            $assignment->load('esim');
-        } else {
-            // If we already have a local assignment but the SIM isn't yet created on Vodacom, create it now.
-            $esim = $assignment->esim;
-            if ($esim && empty($esim->sim_id)) {
-                $createPayload = [
-                    'msisdn' => $esim->msisdn,
-                    'network_id' => (int) ($esim->network_id ?? 1),
-                    'status' => 'MANAGED',
-                ];
-                $createResp = $this->vodacom->post('/api/sims', [], $createPayload);
-
-                if (! $createResp->successful()) {
-                    DB::rollBack();
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Failed to create SIM on Vodacom (existing assignment).',
-                        'vodacom' => [
-                            'status' => $createResp->status(),
-                            'body' => $createResp->json(),
-                        ],
-                    ], 502);
-                }
-
-                $vodacomBody = $createResp->json();
-                $vodacomSimId = data_get($vodacomBody, 'id')
-                    ?? data_get($vodacomBody, 'data.id')
-                    ?? data_get($vodacomBody, 'sim_id')
-                    ?? data_get($vodacomBody, 'data.sim_id');
-                if ($vodacomSimId !== null && $vodacomSimId !== '') {
-                    $esim->sim_id = (int) $vodacomSimId;
-                }
-
-                $esim->status = 'MANAGED';
-                $esim->save();
-                $assignment->load('esim');
-            }
-        }
-
-        DB::commit();
-
-        // Apply bundles (recharge) once per quantity (FAKE / TEST ONLY).
-        $rechargeResults = $this->applyOrderBundlesToSim($order, $assignment->esim->msisdn);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'FAKE payment marked as paid.',
-            'data' => [
-                'order_id' => $order->id,
-                'status' => $order->status,
-                'payment_status' => $order->payment_status,
-                'paid_at' => optional($order->paid_at)->toIso8601String(),
-                'msisdn' => $assignment->esim->msisdn,
-                'recharge' => $rechargeResults,
-            ],
-        ]);
-    }
-
-    /**
-     * FAKE / TEST ONLY: recharge/apply purchased bundles to a SIM.
-     * Remove this after wiring the real payment callback.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function applyOrderBundlesToSim(Order $order, string $msisdn): array
-    {
-        $results = [];
-        $items = $order->orderItems->where('type', 'bundle')->values();
-
-        foreach ($items as $item) {
-            $bundle = $item->bundle_id ? Bundle::find($item->bundle_id) : null;
-            $productId = $bundle?->sim_bundle_id;
-
-            if (! $productId) {
-                $results[] = [
-                    'order_item_id' => $item->id,
-                    'error' => 'Missing sim_bundle_id for bundle.',
-                ];
-                continue;
-            }
-
-            $qty = (int) (($item->metadata['quantity'] ?? 1));
-            if ($qty < 1) {
-                $qty = 1;
-            }
-
-            for ($i = 1; $i <= $qty; $i++) {
-                $reference = $this->generateRechargeReference($order->id, $item->id, $i);
-
-                $payload = [
-                    'msisdn' => $msisdn,
-                    'network_id' => 1,
-                    'product_id' => (int) $productId,
-                    'reference' => $reference,
-                    // "airtime_amount" expected as string in examples
-                    'airtime_amount' => number_format((float) $item->price, 2, '.', ''),
-                ];
-
-                $resp = $this->vodacom->post('/api/recharge', [], $payload);
-
-                $results[] = [
-                    'reference' => $reference,
-                    'payload' => $payload,
-                    'status' => $resp->status(),
-                    'ok' => $resp->successful(),
-                    'body' => $resp->json(),
-                ];
-            }
-        }
-
-        return $results;
-    }
-
-    private function generateRechargeReference(int $orderId, int $orderItemId, int $i): string
-    {
-        $date = now()->format('Ymd');
-        return "RECHARGE-{$date}-{$orderId}-{$orderItemId}-{$i}";
     }
 
     /**

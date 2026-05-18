@@ -56,8 +56,9 @@ class EvPayService
         }
 
         $user = $order->user;
-        $returnUrl = rtrim((string) config('app.url'), '/') . '/payments/evpay/return';
-        $callbackUrl = rtrim((string) config('app.url'), '/') . '/api/payments/evpay/callback';
+        $returnUrl = rtrim((string) config('services.evpay.return_url'), '/');
+        $callbackUrl = config('services.evpay.callback_url')
+            ?: rtrim((string) config('app.url'), '/') . '/api/payments/evpay/callback';
 
         $payload = [
             'total' => number_format((float) $order->total_amount, 2, '.', ''),
