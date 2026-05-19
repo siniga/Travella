@@ -28,6 +28,12 @@ class Order extends Model
         'payment_payload',
         'payment_callback',
         'paid_at',
+        'recharge_status',
+        'recharge_reference',
+        'recharge_transaction_id',
+        'recharge_response',
+        'recharge_completed_at',
+        'recharge_http_status',
     ];
 
     protected $casts = [
@@ -37,7 +43,9 @@ class Order extends Model
         'metadata' => 'array',
         'payment_payload' => 'array',
         'payment_callback' => 'array',
+        'recharge_response' => 'array',
         'paid_at' => 'datetime',
+        'recharge_completed_at' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];

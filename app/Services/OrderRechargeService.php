@@ -7,11 +7,14 @@ use App\Models\Esim;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\UserEsim;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class OrderRechargeService
 {
-    private const FULFILLED_STATUSES = ['sent', 'success', 'queued'];
+    private const FULFILLED_STATUSES = ['success', 'sent', 'queued'];
+
+    private const TERMINAL_SUCCESS_STATUSES = ['success'];
 
     public function __construct(
         private readonly VodacomSimManagerService $vodacom,
@@ -43,13 +46,31 @@ class OrderRechargeService
             return ['processed' => 0, 'skipped' => 0, 'failed' => 0, 'errors' => []];
         }
 
+        if ($this->orderRechargeIsSuccessful($order)) {
+            Log::info('Order recharge skipped: already successful', [
+                'order_id' => $order->id,
+                'user_id' => $order->user_id,
+                'recharge_reference' => $order->recharge_reference,
+                'recharge_transaction_id' => $order->recharge_transaction_id,
+                'recharge_status' => $order->recharge_status,
+            ]);
+
+            return [
+                'processed' => 0,
+                'skipped' => $this->rechargeableItems($order)->count(),
+                'failed' => 0,
+                'errors' => [],
+                'recharge_status' => 'success',
+            ];
+        }
+
         if ($this->shouldSkipRechargeForPayment($order, $paymentId, $transactionRef)) {
             Log::info('Order recharge skipped: already fulfilled for this payment', [
                 'order_id' => $order->id,
                 'user_id' => $order->user_id,
                 'payment_id' => $paymentId,
                 'transaction_reference' => $transactionRef,
-                'recharge_status' => $this->orderMetadata($order)['recharge_status'] ?? null,
+                'recharge_status' => $order->recharge_status,
             ]);
 
             return [
@@ -170,22 +191,53 @@ class OrderRechargeService
 
                 $this->logRechargeResponse($rechargeLog, $httpStatus, $responseBody, $vodacomStatus);
 
-                $this->persistItemRecharge($item, [
-                    'reference' => $reference,
-                    'recharge_reference' => $reference,
-                    'status' => $vodacomStatus,
-                    'requested_at' => now()->toIso8601String(),
-                    'http_status' => $httpStatus,
-                    'payload' => $payload,
-                    'response' => $responseBody,
-                    'recharge_response' => $responseBody,
-                ]);
+                $transactionId = $this->extractVodacomTransactionId($responseBody);
 
-                $this->updateOrderRechargeRecord($order, $reference, $responseBody, $vodacomStatus);
-
-                if ($response->successful() && in_array($vodacomStatus, ['success', 'queued', 'pending'], true)) {
+                if ($this->isVodacomResponseSuccess($responseBody, $httpStatus)) {
+                    $this->markRechargeSuccess($order, $reference, $transactionId, $responseBody, $httpStatus);
+                    $this->persistItemRecharge($item, $this->buildItemRechargeRecord(
+                        $reference,
+                        $transactionId,
+                        'success',
+                        $httpStatus,
+                        $payload,
+                        $responseBody
+                    ));
+                    $result['processed']++;
+                } elseif ($this->isVodacomResponseFailed($responseBody, $httpStatus)) {
+                    $this->markRechargeFailed($order, $reference, $transactionId, $responseBody, $httpStatus);
+                    $this->persistItemRecharge($item, $this->buildItemRechargeRecord(
+                        $reference,
+                        $transactionId,
+                        'failed',
+                        $httpStatus,
+                        $payload,
+                        $responseBody
+                    ));
+                    $result['failed']++;
+                    $result['errors'][] = "Vodacom recharge failed for item {$item->id} (HTTP {$httpStatus}).";
+                } elseif ($response->successful() && in_array($vodacomStatus, ['queued', 'pending'], true)) {
+                    $this->persistOrderRechargeInProgress($order, $reference, $transactionId, $responseBody, $vodacomStatus, $httpStatus);
+                    $this->persistItemRecharge($item, $this->buildItemRechargeRecord(
+                        $reference,
+                        $transactionId,
+                        $vodacomStatus,
+                        $httpStatus,
+                        $payload,
+                        $responseBody
+                    ));
                     $result['processed']++;
                 } else {
+                    $this->markRechargeFailed($order, $reference, $transactionId, $responseBody, $httpStatus);
+                    $this->persistItemRecharge($item, $this->buildItemRechargeRecord(
+                        $reference,
+                        $transactionId,
+                        'pending_retry',
+                        $httpStatus,
+                        $payload,
+                        $responseBody,
+                        $responseBody['error'] ?? 'Unexpected Vodacom response'
+                    ));
                     $result['failed']++;
                     $result['errors'][] = "Vodacom recharge failed for item {$item->id} (HTTP {$httpStatus}, status {$vodacomStatus}).";
                 }
@@ -222,19 +274,239 @@ class OrderRechargeService
 
     private function shouldSkipRechargeForPayment(Order $order, ?string $paymentId, ?string $transactionRef): bool
     {
-        $meta = $this->orderMetadata($order);
-        $storedPaymentId = $meta['recharge_evpay_payment_id'] ?? null;
-        $storedRef = $meta['recharge_evpay_transaction_reference'] ?? null;
-
-        if ($paymentId && $storedPaymentId === $paymentId) {
-            return $this->allRechargeableItemsFulfilled($order);
+        if ($this->orderRechargeIsSuccessful($order)) {
+            return true;
         }
 
-        if ($transactionRef && $storedRef === $transactionRef && in_array($meta['recharge_status'] ?? '', ['completed', 'success', 'queued'], true)) {
-            return $this->allRechargeableItemsFulfilled($order);
+        $meta = $this->orderMetadata($order);
+        $storedPaymentId = $meta['recharge_evpay_payment_id'] ?? $order->gateway_payment_id;
+        $storedRef = $meta['recharge_evpay_transaction_reference'] ?? $order->payment_reference;
+
+        if ($paymentId && $storedPaymentId === $paymentId && $this->allRechargeableItemsFulfilled($order)) {
+            return true;
+        }
+
+        if ($transactionRef && $storedRef === $transactionRef && $this->allRechargeableItemsFulfilled($order)) {
+            return true;
         }
 
         return false;
+    }
+
+    private function orderRechargeIsSuccessful(Order $order): bool
+    {
+        return $order->recharge_status === 'success';
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     */
+    public function markRechargeSuccess(
+        Order $order,
+        string $rechargeReference,
+        ?string $transactionId,
+        array $responseBody,
+        int $httpStatus,
+    ): void {
+        DB::transaction(function () use ($order, $rechargeReference, $transactionId, $responseBody, $httpStatus) {
+            $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
+
+            if ($order->recharge_status === 'success') {
+                return;
+            }
+
+            $order->fill([
+                'recharge_status' => 'success',
+                'recharge_reference' => $rechargeReference,
+                'recharge_transaction_id' => $transactionId,
+                'recharge_response' => $responseBody,
+                'recharge_completed_at' => now(),
+                'recharge_http_status' => $httpStatus,
+            ]);
+            $this->syncRechargeMetadata($order, 'success', $rechargeReference, $transactionId, $responseBody);
+            $order->save();
+
+            Log::info('Order recharge marked successful', [
+                'order_id' => $order->id,
+                'recharge_reference' => $rechargeReference,
+                'recharge_transaction_id' => $transactionId,
+                'recharge_status' => 'success',
+            ]);
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     */
+    public function markRechargeFailed(
+        Order $order,
+        ?string $rechargeReference,
+        ?string $transactionId,
+        array $responseBody,
+        int $httpStatus,
+    ): void {
+        DB::transaction(function () use ($order, $rechargeReference, $transactionId, $responseBody, $httpStatus) {
+            $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
+
+            if ($order->recharge_status === 'success') {
+                return;
+            }
+
+            $order->fill([
+                'recharge_status' => 'failed',
+                'recharge_reference' => $rechargeReference ?? $order->recharge_reference,
+                'recharge_transaction_id' => $transactionId ?? $order->recharge_transaction_id,
+                'recharge_response' => $responseBody,
+                'recharge_completed_at' => null,
+                'recharge_http_status' => $httpStatus,
+            ]);
+            $this->syncRechargeMetadata($order, 'failed', $rechargeReference, $transactionId, $responseBody);
+            $order->save();
+
+            Log::warning('Order recharge marked failed', [
+                'order_id' => $order->id,
+                'recharge_reference' => $rechargeReference,
+                'recharge_transaction_id' => $transactionId,
+                'recharge_status' => 'failed',
+            ]);
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     */
+    private function persistOrderRechargeInProgress(
+        Order $order,
+        string $rechargeReference,
+        ?string $transactionId,
+        array $responseBody,
+        string $status,
+        int $httpStatus,
+    ): void {
+        DB::transaction(function () use ($order, $rechargeReference, $transactionId, $responseBody, $status, $httpStatus) {
+            $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
+
+            if ($order->recharge_status === 'success') {
+                return;
+            }
+
+            $order->fill([
+                'recharge_status' => $status,
+                'recharge_reference' => $rechargeReference,
+                'recharge_transaction_id' => $transactionId,
+                'recharge_response' => $responseBody,
+                'recharge_http_status' => $httpStatus,
+            ]);
+            $this->syncRechargeMetadata($order, $status, $rechargeReference, $transactionId, $responseBody);
+            $order->save();
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     */
+    private function syncRechargeMetadata(
+        Order $order,
+        string $status,
+        ?string $rechargeReference,
+        ?string $transactionId,
+        array $responseBody,
+    ): void {
+        $meta = $this->orderMetadata($order);
+        $meta['recharge_status'] = $status;
+        if ($rechargeReference) {
+            $meta['recharge_reference'] = $rechargeReference;
+        }
+        if ($transactionId) {
+            $meta['recharge_transaction_id'] = $transactionId;
+        }
+        $meta['recharge_response'] = $responseBody;
+        $order->metadata = $meta;
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     * @return array<string, mixed>
+     */
+    private function buildItemRechargeRecord(
+        string $reference,
+        ?string $transactionId,
+        string $status,
+        int $httpStatus,
+        array $payload,
+        array $responseBody,
+        ?string $error = null,
+    ): array {
+        $record = [
+            'reference' => $reference,
+            'recharge_reference' => $reference,
+            'recharge_transaction_id' => $transactionId,
+            'status' => $status,
+            'requested_at' => now()->toIso8601String(),
+            'http_status' => $httpStatus,
+            'payload' => $payload,
+            'response' => $responseBody,
+            'recharge_response' => $responseBody,
+        ];
+
+        if ($error) {
+            $record['error'] = $error;
+        }
+
+        return $record;
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     */
+    private function extractVodacomTransactionId(array $responseBody): ?string
+    {
+        foreach (['transaction_id', 'transactionId', 'TransactionId', 'id'] as $key) {
+            $value = $responseBody[$key] ?? null;
+            if ($value !== null && $value !== '') {
+                return (string) $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     */
+    private function isVodacomResponseSuccess(array $responseBody, int $httpStatus): bool
+    {
+        if ($httpStatus < 200 || $httpStatus >= 300) {
+            return false;
+        }
+
+        $status = strtoupper((string) ($responseBody['status'] ?? $responseBody['Status'] ?? ''));
+
+        if ($status === 'SUCCESS') {
+            return true;
+        }
+
+        return in_array(strtolower($status), ['success', 'successful', 'completed', 'complete', 'approved'], true)
+            || filter_var($responseBody['success'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     */
+    private function isVodacomResponseFailed(array $responseBody, int $httpStatus): bool
+    {
+        if ($httpStatus >= 400) {
+            return true;
+        }
+
+        $status = strtoupper((string) ($responseBody['status'] ?? $responseBody['Status'] ?? ''));
+
+        if (in_array($status, ['FAILED', 'FAILURE', 'ERROR', 'REJECTED', 'DECLINED'], true)) {
+            return true;
+        }
+
+        return array_key_exists('success', $responseBody)
+            && filter_var($responseBody['success'], FILTER_VALIDATE_BOOLEAN) === false;
     }
 
     private function allRechargeableItemsFulfilled(Order $order): bool
@@ -352,6 +624,11 @@ class OrderRechargeService
 
     private function itemAlreadyFulfilled(OrderItem $item): bool
     {
+        $order = $item->relationLoaded('order') ? $item->order : $item->order()->first();
+        if ($order && $this->orderRechargeIsSuccessful($order)) {
+            return true;
+        }
+
         $recharge = $this->itemMetadataArray($item)['recharge'] ?? [];
 
         if (! is_array($recharge)) {
@@ -359,9 +636,9 @@ class OrderRechargeService
         }
 
         $status = $recharge['status'] ?? null;
-        $reference = $recharge['reference'] ?? null;
+        $reference = $recharge['reference'] ?? $recharge['recharge_reference'] ?? null;
 
-        return $reference && in_array($status, self::FULFILLED_STATUSES, true);
+        return $reference && in_array($status, self::TERMINAL_SUCCESS_STATUSES, true);
     }
 
     /**
@@ -570,24 +847,6 @@ class OrderRechargeService
     }
 
     /**
-     * @param  array<string, mixed>  $responseBody
-     */
-    private function updateOrderRechargeRecord(
-        Order $order,
-        string $reference,
-        array $responseBody,
-        string $rechargeStatus,
-    ): void {
-        $meta = $this->orderMetadata($order);
-        $meta['recharge_reference'] = $reference;
-        $meta['recharge_response'] = $responseBody;
-        $meta['recharge_status'] = $rechargeStatus;
-        $meta['recharge_last_response_at'] = now()->toIso8601String();
-        $order->metadata = $meta;
-        $order->save();
-    }
-
-    /**
      * @param  array<string, mixed>|null  $payload
      * @param  array<string, mixed>  $extra
      * @return array<string, mixed>
@@ -701,25 +960,33 @@ class OrderRechargeService
         ?string $transactionRef,
         ?int $userEsimId = null,
     ): void {
-        $meta = $this->orderMetadata($order);
-        $meta['recharge_status'] = $status;
-        if ($error) {
-            $meta['recharge_error'] = $error;
-        }
-        if ($paymentId) {
-            $meta['recharge_evpay_payment_id'] = $paymentId;
-        }
-        if ($transactionRef) {
-            $meta['recharge_evpay_transaction_reference'] = $transactionRef;
-        }
-        if ($userEsimId) {
-            $meta['recharge'] = array_merge(is_array($meta['recharge'] ?? null) ? $meta['recharge'] : [], [
-                'user_esim_id' => $userEsimId,
-            ]);
-        }
-        $meta['recharge_last_attempt_at'] = now()->toIso8601String();
-        $order->metadata = $meta;
-        $order->save();
+        DB::transaction(function () use ($order, $status, $error, $paymentId, $transactionRef, $userEsimId) {
+            $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
+
+            if ($order->recharge_status !== 'success') {
+                $order->recharge_status = $status;
+            }
+
+            $meta = $this->orderMetadata($order);
+            $meta['recharge_status'] = $order->recharge_status ?? $status;
+            if ($error) {
+                $meta['recharge_error'] = $error;
+            }
+            if ($paymentId) {
+                $meta['recharge_evpay_payment_id'] = $paymentId;
+            }
+            if ($transactionRef) {
+                $meta['recharge_evpay_transaction_reference'] = $transactionRef;
+            }
+            if ($userEsimId) {
+                $meta['recharge'] = array_merge(is_array($meta['recharge'] ?? null) ? $meta['recharge'] : [], [
+                    'user_esim_id' => $userEsimId,
+                ]);
+            }
+            $meta['recharge_last_attempt_at'] = now()->toIso8601String();
+            $order->metadata = $meta;
+            $order->save();
+        });
     }
 
     /**
@@ -727,32 +994,17 @@ class OrderRechargeService
      */
     private function deriveOrderRechargeStatus(Order $order, array $result): string
     {
+        $order->refresh();
+
+        if ($order->recharge_status) {
+            return $order->recharge_status;
+        }
+
         if ($result['failed'] > 0) {
             return 'pending_retry';
         }
 
-        $pending = $this->rechargeableItems($order)
-            ->filter(fn (OrderItem $item) => ! $this->itemAlreadyFulfilled($item))
-            ->count();
-
-        if ($pending > 0) {
-            return 'pending_retry';
-        }
-
-        $itemStatuses = $this->rechargeableItems($order)
-            ->map(fn (OrderItem $item) => $this->itemMetadataArray($item)['recharge']['status'] ?? null)
-            ->filter()
-            ->values();
-
-        if ($itemStatuses->contains('queued')) {
-            return 'queued';
-        }
-
-        if ($itemStatuses->contains('pending')) {
-            return 'pending';
-        }
-
-        if ($result['processed'] > 0 || $result['skipped'] > 0) {
+        if ($result['processed'] > 0) {
             return 'success';
         }
 
@@ -770,31 +1022,39 @@ class OrderRechargeService
         ?string $transactionRef,
         ?int $userEsimId,
     ): void {
-        $meta = $this->orderMetadata($order);
-        $meta['recharge_status'] = $rechargeStatus;
-        $meta['fulfillment'] = [
-            'last_run_at' => now()->toIso8601String(),
-            'processed' => $result['processed'],
-            'skipped' => $result['skipped'],
-            'failed' => $result['failed'],
-            'errors' => $result['errors'],
-        ];
-        if ($paymentId) {
-            $meta['recharge_evpay_payment_id'] = $paymentId;
-        }
-        if ($transactionRef) {
-            $meta['recharge_evpay_transaction_reference'] = $transactionRef;
-        }
-        if ($userEsimId) {
-            $meta['recharge'] = array_merge(is_array($meta['recharge'] ?? null) ? $meta['recharge'] : [], [
-                'user_esim_id' => $userEsimId,
-            ]);
-        }
-        unset($meta['recharge_error']);
-        if ($rechargeStatus === 'pending_retry' || $rechargeStatus === 'pending_esim') {
-            $meta['recharge_error'] = $result['errors'][0] ?? $meta['recharge_error'] ?? null;
-        }
-        $order->metadata = $meta;
-        $order->save();
+        DB::transaction(function () use ($order, $result, $rechargeStatus, $paymentId, $transactionRef, $userEsimId) {
+            $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
+
+            if (! $order->recharge_status) {
+                $order->recharge_status = $rechargeStatus;
+            }
+
+            $meta = $this->orderMetadata($order);
+            $meta['recharge_status'] = $order->recharge_status ?? $rechargeStatus;
+            $meta['fulfillment'] = [
+                'last_run_at' => now()->toIso8601String(),
+                'processed' => $result['processed'],
+                'skipped' => $result['skipped'],
+                'failed' => $result['failed'],
+                'errors' => $result['errors'],
+            ];
+            if ($paymentId) {
+                $meta['recharge_evpay_payment_id'] = $paymentId;
+            }
+            if ($transactionRef) {
+                $meta['recharge_evpay_transaction_reference'] = $transactionRef;
+            }
+            if ($userEsimId) {
+                $meta['recharge'] = array_merge(is_array($meta['recharge'] ?? null) ? $meta['recharge'] : [], [
+                    'user_esim_id' => $userEsimId,
+                ]);
+            }
+            unset($meta['recharge_error']);
+            if ($rechargeStatus === 'pending_retry' || $rechargeStatus === 'pending_esim') {
+                $meta['recharge_error'] = $result['errors'][0] ?? $meta['recharge_error'] ?? null;
+            }
+            $order->metadata = $meta;
+            $order->save();
+        });
     }
 }

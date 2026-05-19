@@ -37,8 +37,11 @@ class OrderRechargeTest extends TestCase
                         && $payload['product_id'] === 66
                         && str_starts_with($payload['reference'], 'RCH-')
                         && ($payload['airtime_amount'] ?? null) === '500';
-                }))
-                ->andReturn(Http::response(['success' => true], 200));
+                }), \Mockery::any())
+                ->andReturn(Http::response([
+                    'status' => 'SUCCESS',
+                    'transaction_id' => '467dee1db6a3c1ef',
+                ], 200));
         });
 
         $result = app(OrderRechargeService::class)->fulfillOrder($order);
@@ -47,8 +50,13 @@ class OrderRechargeTest extends TestCase
         $this->assertSame(0, $result['failed']);
 
         $item->refresh();
-        $this->assertContains($item->metadata['recharge']['status'], ['sent', 'success', 'queued', 'pending']);
+        $order->refresh();
+        $this->assertSame('success', $item->metadata['recharge']['status']);
         $this->assertSame(200, $item->metadata['recharge']['http_status']);
+        $this->assertSame('success', $order->recharge_status);
+        $this->assertSame('467dee1db6a3c1ef', $order->recharge_transaction_id);
+        $this->assertNotNull($order->recharge_completed_at);
+        $this->assertSame(200, $order->recharge_http_status);
     }
 
     public function test_fulfill_order_is_idempotent_for_already_sent_items(): void
@@ -85,8 +93,8 @@ class OrderRechargeTest extends TestCase
         $this->mock(VodacomSimManagerService::class, function ($mock) {
             $mock->shouldReceive('post')
                 ->once()
-                ->with('/api/recharge', [], \Mockery::type('array'))
-                ->andReturn(Http::response(['success' => true], 200));
+                ->with('/api/recharge', [], \Mockery::type('array'), \Mockery::any())
+                ->andReturn(Http::response(['status' => 'SUCCESS', 'transaction_id' => 'tx-1'], 200));
         });
 
         $service = app(EvPayService::class);
@@ -122,7 +130,7 @@ class OrderRechargeTest extends TestCase
         $this->assertNotEmpty($result['errors']);
 
         $order->refresh();
-        $this->assertSame('pending_esim', $order->metadata['recharge_status'] ?? null);
+        $this->assertSame('pending_esim', $order->recharge_status ?? $order->metadata['recharge_status'] ?? null);
         $this->assertNotEmpty($order->metadata['recharge_error'] ?? null);
     }
 
@@ -141,7 +149,10 @@ class OrderRechargeTest extends TestCase
         $order->save();
 
         $this->mock(VodacomSimManagerService::class, function ($mock) {
-            $mock->shouldReceive('post')->once()->andReturn(Http::response(['success' => true], 200));
+            $mock->shouldReceive('post')
+                ->once()
+                ->with('/api/recharge', [], \Mockery::type('array'), \Mockery::any())
+                ->andReturn(Http::response(['status' => 'SUCCESS'], 200));
         });
 
         $result = app(OrderRechargeService::class)->rechargePaidOrder($order);
@@ -164,8 +175,11 @@ class OrderRechargeTest extends TestCase
             ],
         ];
         $item->save();
+        $order->recharge_status = 'success';
+        $order->recharge_reference = 'RCH-EXISTING';
+        $order->recharge_transaction_id = 'tx-existing';
+        $order->recharge_completed_at = now();
         $order->metadata = [
-            'recharge_status' => 'success',
             'recharge_evpay_payment_id' => 'pay-123',
         ];
         $order->gateway_payment_id = 'pay-123';
