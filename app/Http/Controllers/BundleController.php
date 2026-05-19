@@ -21,8 +21,16 @@ class BundleController extends Controller
         //     $q->where('active', $request->boolean('active'));
         // }
 
+        $bundles = $q->orderBy('price_usd')->get()->map(function (Bundle $bundle) {
+            $data = $bundle->toArray();
+            $data['price'] = $data['price_usd'];
+            unset($data['price_usd']);
+
+            return $data;
+        });
+
         return response()->json([
-            'bundles' => $q->orderBy('price_usd')->get(),
+            'bundles' => $bundles,
         ]);
     }
 }
