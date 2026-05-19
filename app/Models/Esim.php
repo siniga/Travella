@@ -14,10 +14,14 @@ class Esim extends Model
         'imsi',
         'description',
         'status',
+        'balances',
+        'balance_fetched_at',
     ];
 
     protected $casts = [
         'network_id' => 'integer',
+        'balances' => 'array',
+        'balance_fetched_at' => 'datetime',
     ];
 
     public static function normalizeMsisdn(string $msisdn): string

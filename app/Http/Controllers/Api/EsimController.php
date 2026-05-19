@@ -8,14 +8,18 @@ use App\Http\Requests\EsimRechargeRequest;
 use App\Http\Requests\EsimSuspendRequest;
 use App\Models\Esim;
 use App\Models\UserEsim;
+use App\Services\VodacomBalanceService;
 use App\Services\VodacomSimManagerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class EsimController extends Controller
 {
-    public function __construct(private readonly VodacomSimManagerService $vodacom)
-    {
+    public function __construct(
+        private readonly VodacomSimManagerService $vodacom,
+        private readonly VodacomBalanceService $balances,
+    ) {
     }
 
     public function organisationBalance()
@@ -114,11 +118,37 @@ class EsimController extends Controller
     public function simsBalances(Request $request)
     {
         $query = array_filter($request->only(['msisdn', 'iccid', 'imsi']), fn ($v) => ! is_null($v) && $v !== '');
-        return $this->proxy($this->vodacom->get('/api/sims-balances', $query));
+
+        Log::info('Vodacom sims-balances request', [
+            'query' => $query,
+            'ip' => $request->ip(),
+        ]);
+
+        $response = $this->vodacom->get('/api/sims-balances', $query);
+
+        Log::info('Vodacom sims-balances response', [
+            'query' => $query,
+            'status' => $response->status(),
+            'body' => mb_substr((string) $response->body(), 0, 8000),
+        ]);
+
+        if ($response->successful()) {
+            $synced = $this->balances->syncFromVodacomPayload($response->json());
+            Log::info('Vodacom sims-balances synced to database', ['synced' => $synced]);
+        } else {
+            Log::warning('Vodacom sims-balances failed', [
+                'status' => $response->status(),
+                'body' => mb_substr((string) $response->body(), 0, 2000),
+            ]);
+        }
+
+        return $this->proxy($response);
     }
 
     public function rechargeCallback(Request $request): JsonResponse
     {
+        Log::info('Vodacom recharge callback received', $this->callbackLogContext($request));
+
         $request->validate([
             'msisdn'    => 'required|string',
             'amount'    => 'required|numeric',
@@ -129,12 +159,16 @@ class EsimController extends Controller
         $esim = Esim::findByMsisdn($request->msisdn);
 
         if (! $esim) {
+            Log::warning('Vodacom recharge callback: SIM not found', ['msisdn' => $request->msisdn]);
+
             return response()->json(['success' => false, 'message' => 'SIM not found'], 404);
         }
 
         $assignment = UserEsim::where('esim_id', $esim->id)->first();
 
         if (! $assignment) {
+            Log::warning('Vodacom recharge callback: no user assignment', ['esim_id' => $esim->id, 'msisdn' => $esim->msisdn]);
+
             return response()->json(['success' => false, 'message' => 'No user assignment for this SIM'], 404);
         }
 
@@ -145,61 +179,66 @@ class EsimController extends Controller
             'last_recharged_at'       => now(),
         ]);
 
+        Log::info('Vodacom recharge callback processed', ['user_esim_id' => $assignment->id]);
+
         return response()->json(['success' => true, 'message' => 'Recharge recorded']);
     }
 
     public function simsBalancesCallback(Request $request): JsonResponse
     {
-        $request->validate([
-            'msisdn'           => 'required|string',
-            'balances'         => 'required_without:balance|array',
-            'balances.AIRTIME' => 'nullable|numeric',
-            'balances.DATA'    => 'nullable|numeric',
-            'balances.SMS'     => 'nullable|numeric',
-            'balance'          => 'required_without:balances|numeric',
-            'currency'         => 'sometimes|string|max:10',
-        ]);
+        Log::info('Vodacom sims-balances callback received', $this->callbackLogContext($request));
 
-        $esim = Esim::findByMsisdn($request->msisdn);
+        try {
+            $validated = $request->validate([
+                'msisdn'           => 'required|string',
+                'balances'         => 'required_without:balance|array',
+                'balances.AIRTIME' => 'nullable|numeric',
+                'balances.DATA'    => 'nullable|numeric',
+                'balances.SMS'     => 'nullable|numeric',
+                'balance'          => 'required_without:balances|numeric',
+                'currency'         => 'sometimes|string|max:10',
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::warning('Vodacom sims-balances callback validation failed', [
+                'errors' => $e->errors(),
+                'body' => $request->all(),
+            ]);
 
-        if (! $esim) {
-            return response()->json(['success' => false, 'message' => 'SIM not found'], 404);
+            throw $e;
         }
 
-        $assignment = UserEsim::where('esim_id', $esim->id)->first();
+        $result = $this->balances->applyPayload($validated);
 
-        if (! $assignment) {
-            return response()->json(['success' => false, 'message' => 'No user assignment for this SIM'], 404);
+        if (! $result) {
+            Log::warning('Vodacom sims-balances callback: SIM not in inventory', [
+                'msisdn' => $validated['msisdn'],
+            ]);
+
+            return response()->json(['success' => false, 'message' => 'SIM not found in inventory'], 404);
         }
 
-        $balances = $request->has('balances')
-            ? $this->normalizeVodacomBalances($request->input('balances'))
-            : ['AIRTIME' => (float) $request->balance, 'DATA' => null, 'SMS' => null];
+        Log::info('Vodacom sims-balances callback processed', $result);
 
-        $assignment->update([
-            'balances'           => $balances,
-            'balance'            => $balances['AIRTIME'],
-            'balance_currency'   => $request->input('currency', 'TZS'),
-            'balance_fetched_at' => now(),
+        return response()->json([
+            'success' => true,
+            'message' => 'Balance updated',
+            'esim_id' => $result['esim_id'],
+            'assignment_updated' => $result['assignment_updated'],
         ]);
-
-        return response()->json(['success' => true, 'message' => 'Balance updated']);
     }
 
     /**
-     * @param  array<string, mixed>  $raw
-     * @return array{AIRTIME: float|null, DATA: float|null, SMS: float|null}
+     * @return array<string, mixed>
      */
-    private function normalizeVodacomBalances(array $raw): array
+    private function callbackLogContext(Request $request): array
     {
-        $normalized = [];
-
-        foreach (['AIRTIME', 'DATA', 'SMS'] as $key) {
-            $value = $raw[$key] ?? null;
-            $normalized[$key] = ($value === null || $value === '') ? null : (float) $value;
-        }
-
-        return $normalized;
+        return [
+            'method' => $request->method(),
+            'ip' => $request->ip(),
+            'query' => $request->query(),
+            'body' => $request->all(),
+            'raw_content' => mb_substr((string) $request->getContent(), 0, 8000),
+        ];
     }
 
     private function proxy($vodacomResponse)
@@ -211,4 +250,3 @@ class EsimController extends Controller
             ->header('Content-Type', $contentType ?: 'application/json');
     }
 }
-

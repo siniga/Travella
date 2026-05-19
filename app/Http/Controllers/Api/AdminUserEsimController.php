@@ -59,7 +59,7 @@ class AdminUserEsimController extends Controller
         $esimId = $data['esim_id'] ?? null;
 
         if (! $esimId && ! empty($data['msisdn'])) {
-            $esimId = Esim::where('msisdn', $data['msisdn'])->value('id');
+            $esimId = Esim::findByMsisdn($data['msisdn'])?->id;
         }
 
         if (! $esimId) {

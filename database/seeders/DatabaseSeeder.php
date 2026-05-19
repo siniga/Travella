@@ -20,6 +20,7 @@ class DatabaseSeeder extends Seeder
             CountryProviderSeeder::class,
             BundleSeeder::class,
             EsimSeeder::class,
+            UserEsimAssignmentSeeder::class,
             KycSeeder::class,
             OrderSeeder::class, // Add order seeder after all dependencies
         ]);
