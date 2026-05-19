@@ -24,7 +24,7 @@ return [
 
    'fx' => [
         // TZS per 1 USD (used when returning bundles in USD)
-        'tzs_to_usd_rate' => (float) env('TZS_TO_USD_RATE', 2500),
+        'tzs_to_usd_rate' => (float) env('TZS_TO_USD_RATE', 2610),
    ],
 
    'vodacom_sim' => [
