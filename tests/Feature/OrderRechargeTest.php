@@ -32,11 +32,11 @@ class OrderRechargeTest extends TestCase
             $mock->shouldReceive('post')
                 ->once()
                 ->with('/api/recharge', [], \Mockery::on(function (array $payload) {
-                    return $payload['msisdn'] === '255797053059'
+                    return $payload['msisdn'] === '+255797053059'
                         && $payload['network_id'] === 1
                         && $payload['product_id'] === 66
                         && str_starts_with($payload['reference'], 'RECHARGE')
-                        && ($payload['airtime_amount'] ?? null) === '  500';
+                        && ($payload['airtime_amount'] ?? null) === '500.00';
                 }), \Mockery::any())
                 ->andReturn(Http::response([
                     'status' => 'SUCCESS',

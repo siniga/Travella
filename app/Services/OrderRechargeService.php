@@ -735,7 +735,7 @@ class OrderRechargeService
     {
         $existing = $this->itemMetadataArray($item)['recharge']['reference'] ?? null;
         if (is_string($existing) && $existing !== '') {
-            return $existing;
+            return VodacomRechargePayload::formatReference($existing);
         }
 
         return VodacomRechargePayload::generateReference($order->id, $item->id);

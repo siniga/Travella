@@ -36,7 +36,6 @@ return [
             66 => env('VODACOM_RECHARGE_AIRTIME_66', '500'),
         ], fn ($v) => $v !== null && $v !== ''),
         'recharge_reference_prefix' => env('VODACOM_RECHARGE_REFERENCE_PREFIX', 'RECHARGE'),
-        'recharge_airtime_pad_width' => (int) env('VODACOM_RECHARGE_AIRTIME_PAD_WIDTH', 5),
    ],
 
     'postmark' => [

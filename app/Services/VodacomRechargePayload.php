@@ -2,11 +2,19 @@
 
 namespace App\Services;
 
+use App\Models\Esim;
+
 /**
  * Normalizes JSON bodies for Vodacom POST /api/recharge.
  *
- * @see https://simmanager.vodacom.co.tz — expected shape:
- * msisdn, network_id, product_id, reference (e.g. RECHARGE153335), airtime_amount (e.g. "  500")
+ * Expected shape:
+ * {
+ *   "airtime_amount": "100.25",
+ *   "msisdn": "+25583479408",
+ *   "network_id": 1,
+ *   "product_id": 66,
+ *   "reference": "RECHARGE123"
+ * }
  */
 class VodacomRechargePayload
 {
@@ -18,8 +26,12 @@ class VodacomRechargePayload
     {
         $normalized = [];
 
+        if (isset($payload['airtime_amount']) && $payload['airtime_amount'] !== '' && $payload['airtime_amount'] !== null) {
+            $normalized['airtime_amount'] = self::formatAirtimeAmount($payload['airtime_amount']);
+        }
+
         if (! empty($payload['msisdn'])) {
-            $normalized['msisdn'] = (string) $payload['msisdn'];
+            $normalized['msisdn'] = self::formatMsisdn((string) $payload['msisdn']);
         }
 
         if (isset($payload['network_id']) && $payload['network_id'] !== '') {
@@ -31,27 +43,39 @@ class VodacomRechargePayload
         }
 
         if (! empty($payload['reference'])) {
-            $normalized['reference'] = (string) $payload['reference'];
-        }
-
-        if (isset($payload['airtime_amount']) && $payload['airtime_amount'] !== '' && $payload['airtime_amount'] !== null) {
-            $normalized['airtime_amount'] = self::formatAirtimeAmount($payload['airtime_amount']);
+            $normalized['reference'] = self::formatReference((string) $payload['reference']);
         }
 
         return $normalized;
     }
 
+    public static function formatMsisdn(string $msisdn): string
+    {
+        $digits = Esim::normalizeMsisdn($msisdn);
+
+        return '+'.$digits;
+    }
+
     public static function formatAirtimeAmount(mixed $value): string
     {
-        if (is_string($value) && preg_match('/^\d+$/', trim($value))) {
-            $digits = trim($value);
-        } else {
-            $digits = (string) max(1, (int) round((float) $value));
+        $numeric = is_string($value)
+            ? (float) str_replace([',', ' '], '', trim($value))
+            : (float) $value;
+
+        return number_format(max(0.01, $numeric), 2, '.', '');
+    }
+
+    public static function formatReference(string $reference): string
+    {
+        $reference = trim($reference);
+
+        if (preg_match('/^RCH-/i', $reference)) {
+            $prefix = (string) config('services.vodacom_sim.recharge_reference_prefix', 'RECHARGE');
+
+            return $prefix.substr(md5($reference), 0, 12);
         }
 
-        $width = max(strlen($digits), (int) config('services.vodacom_sim.recharge_airtime_pad_width', 5));
-
-        return str_pad($digits, $width, ' ', STR_PAD_LEFT);
+        return $reference;
     }
 
     public static function generateReference(int $orderId, int $orderItemId): string
