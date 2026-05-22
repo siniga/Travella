@@ -9,8 +9,6 @@ use App\Models\OrderItem;
 use App\Models\Trip;
 use App\Models\Kyc;
 use App\Services\EvPayService;
-use App\Services\OrderRechargeService;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,7 +17,6 @@ class OrderController extends Controller
 {
     public function __construct(
         private readonly EvPayService $evpay,
-        private readonly OrderRechargeService $orderRecharge,
     ) {
     }
 
@@ -170,19 +167,6 @@ class OrderController extends Controller
                 $checkout = $this->evpay->createCheckoutUrl($order);
                 $checkoutUrl = $checkout['checkout_url'] ?? null;
                 $paymentRef = $checkout['payment_reference'] ?? null;
-            } else {
-                try {
-                    $this->orderRecharge->rechargePaidOrder($order, [
-                        'payment_id' => $order->gateway_payment_id,
-                        'transaction_reference' => $order->payment_reference,
-                    ]);
-                } catch (\Throwable $e) {
-                    Log::error('Order recharge fulfillment failed after storeOrder', [
-                        'order_id' => $order->id,
-                        'user_id' => $order->user_id,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
             }
 
             return response()->json([

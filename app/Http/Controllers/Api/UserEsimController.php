@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\MeEsimRechargeRequest;
+use App\Models\Esim;
 use App\Models\UserEsim;
 use App\Services\VodacomSimManagerService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class UserEsimController extends Controller
 {
@@ -26,6 +29,83 @@ class UserEsimController extends Controller
             'success' => true,
             'data' => $esims,
         ]);
+    }
+
+    /**
+     * Assign the authenticated user a SIM from inventory if they do not already have one.
+     */
+    public function register(Request $request): JsonResponse
+    {
+        $userId = $request->user()->id;
+
+        $existing = UserEsim::query()
+            ->where('user_id', $userId)
+            ->whereHas('esim', fn ($q) => $q->whereNotNull('msisdn')->where('msisdn', '!=', ''))
+            ->with('esim')
+            ->first();
+
+        if ($existing) {
+            return response()->json([
+                'success' => true,
+                'message' => 'SIM already assigned',
+                'data' => $existing,
+            ]);
+        }
+
+        try {
+            $result = DB::transaction(function () use ($userId) {
+                $existing = UserEsim::query()
+                    ->where('user_id', $userId)
+                    ->whereHas('esim', fn ($q) => $q->whereNotNull('msisdn')->where('msisdn', '!=', ''))
+                    ->with('esim')
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($existing) {
+                    return ['assignment' => $existing, 'created' => false];
+                }
+
+                $esim = Esim::query()
+                    ->whereNotNull('msisdn')
+                    ->where('msisdn', '!=', '')
+                    ->whereNotIn('id', UserEsim::query()->select('esim_id'))
+                    ->orderBy('id')
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $esim || UserEsim::where('esim_id', $esim->id)->exists()) {
+                    return ['assignment' => null, 'created' => false];
+                }
+
+                $assignment = UserEsim::create([
+                    'user_id' => $userId,
+                    'esim_id' => $esim->id,
+                ]);
+
+                $esim->update(['status' => 'MANAGED']);
+
+                return ['assignment' => $assignment->load('esim'), 'created' => true];
+            });
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to assign SIM',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+
+        if (! $result['assignment']) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No unassigned SIMs available in inventory',
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $result['created'] ? 'SIM assigned successfully' : 'SIM already assigned',
+            'data' => $result['assignment'],
+        ], $result['created'] ? 201 : 200);
     }
 
     public function recharges(Request $request)

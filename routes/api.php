@@ -71,6 +71,7 @@ Route::prefix('esim')->middleware(['auth:sanctum', 'admin'])->group(function () 
 Route::prefix('me')->middleware('auth:sanctum')->group(function () {
   Route::get('/orders', [OrderController::class, 'myOrders']);
   Route::get('/esims', [UserEsimController::class, 'index']);
+  Route::post('/esims/register', [UserEsimController::class, 'register']);
   Route::get('/recharges', [UserEsimController::class, 'recharges']);
   Route::get('/usage', [UserEsimController::class, 'usage']);
   Route::get('/usage-details', [UserEsimController::class, 'usageDetails']);
