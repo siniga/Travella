@@ -5,16 +5,21 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\MeEsimRechargeRequest;
 use App\Models\Esim;
+use App\Models\Order;
 use App\Models\UserEsim;
+use App\Services\OrderRechargeService;
 use App\Services\VodacomSimManagerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class UserEsimController extends Controller
 {
-    public function __construct(private readonly VodacomSimManagerService $vodacom)
-    {
+    public function __construct(
+        private readonly VodacomSimManagerService $vodacom,
+        private readonly OrderRechargeService $orderRecharge,
+    ) {
     }
 
     public function index(Request $request)
@@ -37,20 +42,6 @@ class UserEsimController extends Controller
     public function register(Request $request): JsonResponse
     {
         $userId = $request->user()->id;
-
-        $existing = UserEsim::query()
-            ->where('user_id', $userId)
-            ->whereHas('esim', fn ($q) => $q->whereNotNull('msisdn')->where('msisdn', '!=', ''))
-            ->with('esim')
-            ->first();
-
-        if ($existing) {
-            return response()->json([
-                'success' => true,
-                'message' => 'SIM already assigned',
-                'data' => $existing,
-            ]);
-        }
 
         try {
             $result = DB::transaction(function () use ($userId) {
@@ -101,11 +92,51 @@ class UserEsimController extends Controller
             ], 422);
         }
 
+        $fulfillment = $this->fulfillLatestPaidOrder($userId);
+
         return response()->json([
             'success' => true,
             'message' => $result['created'] ? 'SIM assigned successfully' : 'SIM already assigned',
             'data' => $result['assignment'],
+            'fulfillment' => $fulfillment,
         ], $result['created'] ? 201 : 200);
+    }
+
+    /**
+     * Fulfill the user's latest paid order (bundle recharges) using their assigned SIM.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function fulfillLatestPaidOrder(int $userId): ?array
+    {
+        $order = Order::query()
+            ->where('user_id', $userId)
+            ->where('payment_status', 'paid')
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $order) {
+            return null;
+        }
+
+        try {
+            return $this->orderRecharge->rechargePaidOrder($order);
+        } catch (\Throwable $e) {
+            Log::error('Order recharge fulfillment failed after SIM registration', [
+                'order_id' => $order->id,
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'order_id' => $order->id,
+                'processed' => 0,
+                'skipped' => 0,
+                'failed' => 0,
+                'errors' => [$e->getMessage()],
+                'recharge_status' => 'failed',
+            ];
+        }
     }
 
     public function recharges(Request $request)
