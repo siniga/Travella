@@ -67,21 +67,22 @@ class VodacomRechargePayload
 
     public static function formatReference(string $reference): string
     {
-        $reference = trim($reference);
-
-        if (preg_match('/^RCH-/i', $reference)) {
-            $prefix = (string) config('services.vodacom_sim.recharge_reference_prefix', 'RECHARGE');
-
-            return $prefix.substr(md5($reference), 0, 12);
-        }
-
-        return $reference;
+        return trim($reference);
     }
 
-    public static function generateReference(int $orderId, int $orderItemId): string
+    /**
+     * Unique numeric suffix after RECHARGE (e.g. RECHARGE153335).
+     */
+    public static function generateReference(int $orderId, int $orderItemId, ?string $seed = null): string
     {
         $prefix = (string) config('services.vodacom_sim.recharge_reference_prefix', 'RECHARGE');
+        $basis = $seed ?? "{$orderId}:{$orderItemId}";
+        $suffix = abs(crc32($basis)) % 1000000000;
 
-        return $prefix.($orderId * 10000 + $orderItemId);
+        if ($suffix < 100) {
+            $suffix += 100;
+        }
+
+        return $prefix.$suffix;
     }
 }

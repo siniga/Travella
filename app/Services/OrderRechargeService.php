@@ -131,7 +131,7 @@ class OrderRechargeService
         $this->linkOrderToUserEsim($order, $assignment, $paymentId, $transactionRef);
         $this->setOrderRechargeStatus($order, 'in_progress', null, $paymentId, $transactionRef, $assignment->id);
 
-        $result = ['processed' => 0, 'skipped' => 0, 'failed' => 0, 'errors' => []];
+        $result = ['processed' => 0, 'skipped' => 0, 'failed' => 0, 'errors' => [], 'attempts' => []];
 
         foreach ($this->rechargeableItems($order) as $item) {
             if ($this->itemAlreadyFulfilled($item)) {
@@ -215,7 +215,8 @@ class OrderRechargeService
                         $responseBody
                     ));
                     $result['failed']++;
-                    $result['errors'][] = "Vodacom recharge failed for item {$item->id} (HTTP {$httpStatus}).";
+                    $result['errors'][] = $this->vodacomFailureMessage($item->id, $httpStatus, $responseBody);
+                    $result['attempts'][] = $this->rechargeAttemptRecord($item->id, $payload, $httpStatus, $responseBody);
                 } elseif ($response->successful() && in_array($vodacomStatus, ['queued', 'pending'], true)) {
                     $this->persistOrderRechargeInProgress($order, $reference, $transactionId, $responseBody, $vodacomStatus, $httpStatus);
                     $this->persistItemRecharge($item, $this->buildItemRechargeRecord(
@@ -239,7 +240,8 @@ class OrderRechargeService
                         $responseBody['error'] ?? 'Unexpected Vodacom response'
                     ));
                     $result['failed']++;
-                    $result['errors'][] = "Vodacom recharge failed for item {$item->id} (HTTP {$httpStatus}, status {$vodacomStatus}).";
+                    $result['errors'][] = $this->vodacomFailureMessage($item->id, $httpStatus, $responseBody, $vodacomStatus);
+                    $result['attempts'][] = $this->rechargeAttemptRecord($item->id, $payload, $httpStatus, $responseBody);
                 }
             } catch (\Throwable $e) {
                 Log::error('Order recharge request exception', array_merge(
@@ -678,7 +680,7 @@ class OrderRechargeService
 
         $errors = [];
 
-        if (empty($payload['msisdn']) || ! is_string($payload['msisdn'])) {
+        if (empty($payload['msisdn']) || ! is_string($payload['msisdn']) || ! str_starts_with($payload['msisdn'], '+')) {
             $errors[] = 'msisdn';
         }
 
@@ -733,12 +735,57 @@ class OrderRechargeService
 
     private function generateRechargeReference(Order $order, OrderItem $item): string
     {
-        $existing = $this->itemMetadataArray($item)['recharge']['reference'] ?? null;
-        if (is_string($existing) && $existing !== '') {
+        $recharge = $this->itemMetadataArray($item)['recharge'] ?? [];
+        $status = is_array($recharge) ? ($recharge['status'] ?? null) : null;
+        $existing = is_array($recharge) ? ($recharge['reference'] ?? null) : null;
+
+        if (is_string($existing) && $existing !== '' && in_array($status, ['success', 'sent', 'queued'], true)) {
             return VodacomRechargePayload::formatReference($existing);
         }
 
-        return VodacomRechargePayload::generateReference($order->id, $item->id);
+        $seed = "{$order->id}:{$item->id}";
+        if (in_array($status, ['failed', 'pending_retry'], true)) {
+            $seed .= ':'.microtime(true);
+        }
+
+        return VodacomRechargePayload::generateReference($order->id, $item->id, $seed);
+    }
+
+    /**
+     * @param  array<string, mixed>  $responseBody
+     */
+    private function vodacomFailureMessage(int $itemId, int $httpStatus, array $responseBody, ?string $vodacomStatus = null): string
+    {
+        $detail = $responseBody['error']
+            ?? $responseBody['message']
+            ?? $responseBody['Message']
+            ?? null;
+
+        $message = "Vodacom recharge failed for item {$itemId} (HTTP {$httpStatus}";
+        if ($vodacomStatus) {
+            $message .= ", status {$vodacomStatus}";
+        }
+        $message .= ')';
+        if (is_string($detail) && $detail !== '') {
+            $message .= ': '.$detail;
+        }
+
+        return $message;
+    }
+
+    /**
+     * @param  array<string, string|int>  $payload
+     * @param  array<string, mixed>  $responseBody
+     * @return array<string, mixed>
+     */
+    private function rechargeAttemptRecord(int $itemId, array $payload, int $httpStatus, array $responseBody): array
+    {
+        return [
+            'order_item_id' => $itemId,
+            'payload' => $payload,
+            'http_status' => $httpStatus,
+            'vodacom_response' => $responseBody,
+        ];
     }
 
     /**

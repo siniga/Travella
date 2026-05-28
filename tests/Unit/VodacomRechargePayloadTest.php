@@ -43,21 +43,25 @@ class VodacomRechargePayloadTest extends TestCase
         $this->assertSame('RECHARGE153335', $payload['reference']);
     }
 
-    public function test_generate_reference_for_order_and_item(): void
+    public function test_generate_reference_is_stable_for_same_order_item(): void
     {
         config(['services.vodacom_sim.recharge_reference_prefix' => 'RECHARGE']);
 
-        $this->assertSame('RECHARGE153335', VodacomRechargePayload::generateReference(15, 3335));
-        $this->assertSame('RECHARGE780078', VodacomRechargePayload::generateReference(78, 78));
+        $first = VodacomRechargePayload::generateReference(15, 3335);
+        $second = VodacomRechargePayload::generateReference(15, 3335);
+
+        $this->assertStringStartsWith('RECHARGE', $first);
+        $this->assertSame($first, $second);
     }
 
-    public function test_legacy_rch_reference_is_replaced_with_recharge_prefix(): void
+    public function test_generate_reference_changes_when_retry_seed_differs(): void
     {
         config(['services.vodacom_sim.recharge_reference_prefix' => 'RECHARGE']);
 
-        $reference = VodacomRechargePayload::formatReference('RCH-20260522-78-78');
+        $first = VodacomRechargePayload::generateReference(78, 78, '78:78');
+        $retry = VodacomRechargePayload::generateReference(78, 78, '78:78:retry');
 
-        $this->assertStringStartsWith('RECHARGE', $reference);
-        $this->assertStringNotContainsString('RCH-', $reference);
+        $this->assertStringStartsWith('RECHARGE', $first);
+        $this->assertNotSame($first, $retry);
     }
 }
