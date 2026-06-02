@@ -13,10 +13,14 @@ use App\Http\Controllers\BundleController;
 use App\Http\Controllers\ProviderController;
 use App\Http\Controllers\OrderController;  
 use App\Http\Controllers\EvPayController;
-use App\Http\Controllers\RevenueDashboard;
+use App\Http\Controllers\Admin\RevenueDashboard;
 use App\Http\Controllers\Api\EsimController;
 use App\Http\Controllers\Api\UserEsimController;
 use App\Http\Controllers\Api\AdminUserEsimController;
+use App\Http\Controllers\Admin\AdminDashboard;
+use App\Http\Controllers\Admin\ServiceProviderSimsController;
+use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\AgentController;
 
 
 Route::prefix('auth')->group(function () {
@@ -70,12 +74,22 @@ Route::prefix('esim')->middleware(['auth:sanctum', 'admin'])->group(function () 
 
 Route::prefix('me')->middleware('auth:sanctum')->group(function () {
   Route::get('/orders', [OrderController::class, 'myOrders']);
+  Route::get('/orders/search', [OrderController::class, 'searchByOrderNumber']);
   Route::get('/esims', [UserEsimController::class, 'index']);
   Route::post('/esims/register', [UserEsimController::class, 'register']);
   Route::get('/recharges', [UserEsimController::class, 'recharges']);
   Route::get('/usage', [UserEsimController::class, 'usage']);
   Route::get('/usage-details', [UserEsimController::class, 'usageDetails']);
   Route::post('/recharge', [UserEsimController::class, 'recharge']);
+
+  Route::patch('/agent-location', [AgentController::class, 'updateMyLocation'])
+    ->middleware('agent');
+});
+
+// Agent app routes (use agent token — not /api/admin/*)
+Route::prefix('agent')->middleware(['auth:sanctum', 'agent'])->group(function () {
+  Route::get('/orders/search', [OrderController::class, 'searchByOrderNumber']);
+  Route::patch('/location', [AgentController::class, 'updateMyLocation']);
 });
 
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function () {
@@ -85,12 +99,26 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
   Route::delete('/user-esims/{id}', [AdminUserEsimController::class, 'destroy']);
   Route::post('/user-esims/sync-from-vodacom', [AdminUserEsimController::class, 'syncFromVodacom']);
 
+  // Customers
+  Route::get('/customers', [CustomerController::class, 'index']);
+
+  // Agents
+  Route::get('/agents', [AgentController::class, 'index']);
+  Route::post('/agents', [AgentController::class, 'store']);
+
   // Orders (admin)
   Route::get('/orders', [OrderController::class, 'getOrders']);
+  Route::get('/orders/search', [OrderController::class, 'searchByOrderNumber']);
   Route::get('/users/{userId}/orders', [OrderController::class, 'getOrdersByUser']);
 
   // Dashboard (admin)
-  Route::get('/dashboard/stats', [RevenueDashboard::class, 'stats']);
+  Route::get('/revenue/stats', [RevenueDashboard::class, 'stats']);
+  Route::get('/dashboard/stats', [AdminDashboard::class, 'stats']);
+  Route::get('/dashboard/esims-issued', [AdminDashboard::class, 'esimsIssued']);
+  Route::get('/dashboard/esim-activities', [AdminDashboard::class, 'esimIssuedActivities']);
+
+  // Service provider SIM inventory (local DB)
+  Route::get('/service-providers/{provider}/sims', [ServiceProviderSimsController::class, 'index']);
 });
 
 

@@ -14,6 +14,7 @@ class DatabaseSeeder extends Seeder
         // Call all seeders in the correct order (respecting foreign key constraints)
         $this->call([
             UserSeeder::class,
+            AgentLocationSeeder::class,
             CountrySeeder::class,
             ProviderSeeder::class,
             BundleTypeSeeder::class,

@@ -63,6 +63,11 @@ class User extends Authenticatable implements MustVerifyEmail
         return $this->hasMany(UserEsim::class);
     }
 
+    public function agentLocation()
+    {
+        return $this->hasOne(AgentLocation::class);
+    }
+
     public function isAdmin(): bool
     {
         return $this->role === 'admin';
@@ -71,5 +76,10 @@ class User extends Authenticatable implements MustVerifyEmail
     public function isUser(): bool
     {
         return $this->role === 'user';
+    }
+
+    public function isAgent(): bool
+    {
+        return $this->role === 'agent';
     }
 }

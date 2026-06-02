@@ -29,7 +29,9 @@ class EsimSeeder extends Seeder
                     'iccid' => $p['iccid'],
                     'network_id' => 1,
                     'status' => 'AVAILABLE',
-                    'description' => 'Seeded inventory eSIM',
+                    'sim_type' => Esim::SIM_TYPE_PHYSICAL,
+                    'provider_status' => Esim::PROVIDER_STATUS_ACTIVE,
+                    'description' => 'Seeded inventory SIM',
                 ]
             );
         }

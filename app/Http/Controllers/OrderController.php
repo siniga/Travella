@@ -59,6 +59,44 @@ class OrderController extends Controller
     }
 
     /**
+     * Search an order by order number (draft_id), e.g. DRAFT-2026-001.
+     * Admin: any order. Agent: any order. Customer: own orders only.
+     */
+    public function searchByOrderNumber(Request $request): JsonResponse
+    {
+        $draftId = $this->resolveOrderNumber($request);
+        if ($draftId === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Provide draft_id or order_number query parameter.',
+            ], 422);
+        }
+
+        $user = $request->user();
+        $query = Order::query()
+            ->with(['trip', 'orderItems.bundle', 'user', 'kyc'])
+            ->where('draft_id', $draftId);
+
+        if ($user && ! $user->isAdmin() && ! $user->isAgent()) {
+            $query->where('user_id', $user->id);
+        }
+
+        $order = $query->first();
+
+        if (! $order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Order not found.',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $order,
+        ]);
+    }
+
+    /**
      * Create or complete an order in one step (merged draft + finalize).
      */
     public function storeOrder(StoreOrderRequest $request): JsonResponse
@@ -424,6 +462,16 @@ class OrderController extends Controller
      *
      * @return array<string, mixed>
      */
+    private function resolveOrderNumber(Request $request): ?string
+    {
+        $value = $request->query('draft_id') ?? $request->query('order_number');
+        if ($value === null || trim((string) $value) === '') {
+            return null;
+        }
+
+        return trim((string) $value);
+    }
+
     private function metadataArray(Order $order): array
     {
         $raw = $order->getAttributes()['metadata'] ?? null;

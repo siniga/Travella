@@ -43,7 +43,10 @@ class AuthController extends Controller
     }
 
     public function login(LoginRequest $req) {
-        $user = User::where('email', $req->email)->first();
+        $user = User::query()
+            ->with('agentLocation')
+            ->where('email', $req->email)
+            ->first();
         if (! $user || ! Hash::check($req->password, $user->password)) {
             return response()->json(['message' => 'Invalid credentials'], 422);
         }
@@ -63,7 +66,12 @@ class AuthController extends Controller
     }
 
     public function me(Request $req) {
-        return response()->json(['user' => $this->userPayload($req->user())]);
+        $user = $req->user();
+        if ($user) {
+            $user->loadMissing('agentLocation');
+        }
+
+        return response()->json(['user' => $this->userPayload($user)]);
     }
 
     public function logout(Request $req) {
@@ -78,6 +86,20 @@ class AuthController extends Controller
             return null;
         }
 
-        return $user->only(['id', 'name', 'email', 'role']);
+        $payload = $user->only(['id', 'name', 'email', 'role']);
+
+        if ($user->role === 'agent') {
+            $payload['agent_location'] = $user->agentLocation
+                ? $user->agentLocation->only([
+                    'id',
+                    'phone',
+                    'work_station',
+                    'current_location',
+                    'current_location_updated_at',
+                ])
+                : null;
+        }
+
+        return $payload;
     }
 }

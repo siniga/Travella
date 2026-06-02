@@ -17,6 +17,7 @@ return new class extends Migration
             $table->string('imsi')->nullable()->unique();
             $table->string('description')->nullable();
             $table->enum('status', ['AVAILABLE', 'MANAGED'])->default('AVAILABLE');
+            $table->enum('provider_status', ['active', 'suspended'])->default('active');
             $table->timestamps();
 
             $table->index('msisdn');

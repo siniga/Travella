@@ -1,7 +1,8 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Admin;
 
+use App\Http\Controllers\Controller;
 use App\Models\Order;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Collection;
@@ -9,6 +10,11 @@ use Illuminate\Support\Facades\DB;
 
 class RevenueDashboard extends Controller
 {
+    public function index(): JsonResponse
+    {
+        return $this->stats();
+    }
+
     public function stats(): JsonResponse
     {
         $ordersQuery = Order::query()->where('status', '!=', 'draft');

@@ -6,6 +6,14 @@ use Illuminate\Database\Eloquent\Model;
 
 class Esim extends Model
 {
+    public const SIM_TYPE_ESIM = 'esim';
+
+    public const SIM_TYPE_PHYSICAL = 'physical';
+
+    public const PROVIDER_STATUS_ACTIVE = 'active';
+
+    public const PROVIDER_STATUS_SUSPENDED = 'suspended';
+
     protected $fillable = [
         'sim_id',
         'msisdn',
@@ -14,6 +22,8 @@ class Esim extends Model
         'imsi',
         'description',
         'status',
+        'sim_type',
+        'provider_status',
         'balances',
         'balance_fetched_at',
     ];

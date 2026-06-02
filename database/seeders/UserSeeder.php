@@ -18,6 +18,7 @@ class UserSeeder extends Seeder
             ['email' => 'admin@travela.com'],
             [
                 'name' => 'Admin User',
+                'role' => 'admin',
                 'password' => Hash::make('password123'),
                 'email_verified_at' => now(),
             ]

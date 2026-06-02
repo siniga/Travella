@@ -1,0 +1,178 @@
+{
+  "info": {
+    "_postman_id": "travela-agents-collection",
+    "name": "Travela API — Agents",
+    "description": "Admin: list/create agents. Agent: search orders, update location.\n\n**Agent app** — login with **Auth — Agent login**, then use `/api/agent/*` (NOT `/api/admin/*).\n\n**Setup**\n1. Set `base_url` (default `http://127.0.0.1:8000/api`).\n2. Agent: **Auth — Agent login** → `agent_token`.\n3. Admin: **Auth — Admin login** → `admin_token`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000/api"
+    },
+    {
+      "key": "admin_token",
+      "value": ""
+    },
+    {
+      "key": "agent_token",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth — Admin login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.token) {",
+              "  pm.collectionVariables.set('admin_token', json.token);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"admin@travela.com\",\n  \"password\": \"password123\",\n  \"device\": \"postman\"\n}"
+        },
+        "url": "{{base_url}}/auth/login"
+      },
+      "response": []
+    },
+    {
+      "name": "Auth — Agent login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.token) {",
+              "  pm.collectionVariables.set('agent_token', json.token);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"alice.mwangi@travela.com\",\n  \"password\": \"password123\",\n  \"device\": \"postman\"\n}"
+        },
+        "url": "{{base_url}}/auth/login",
+        "description": "Seeded agent from AgentLocationSeeder. Saves token to `agent_token`."
+      },
+      "response": []
+    },
+    {
+      "name": "Agents — List (admin)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{admin_token}}", "type": "string" }]
+        },
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": "{{base_url}}/admin/agents"
+      },
+      "response": []
+    },
+    {
+      "name": "Agents — Create (new user)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{admin_token}}", "type": "string" }]
+        },
+        "method": "POST",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Jane Agent\",\n  \"email\": \"jane.agent@example.com\",\n  \"password\": \"SecretPass123\",\n  \"phone\": \"+255712345678\",\n  \"work_station\": \"Dar es Salaam Airport Counter\",\n  \"current_location\": \"Terminal 3, Gate 12\"\n}"
+        },
+        "url": "{{base_url}}/admin/agents"
+      },
+      "response": []
+    },
+    {
+      "name": "Agents — Create (existing user)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{admin_token}}", "type": "string" }]
+        },
+        "method": "POST",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": 1,\n  \"phone\": \"+255798765432\",\n  \"work_station\": \"Nairobi CBD Office\",\n  \"current_location\": \"Kimathi Street\"\n}"
+        },
+        "url": "{{base_url}}/admin/agents"
+      },
+      "response": []
+    },
+    {
+      "name": "Agent — Search order by number",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{agent_token}}", "type": "string" }]
+        },
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": {
+          "raw": "{{base_url}}/agent/orders/search?draft_id=DRAFT-2025-001",
+          "host": ["{{base_url}}"],
+          "path": ["agent", "orders", "search"],
+          "query": [{ "key": "draft_id", "value": "DRAFT-2025-001" }]
+        },
+        "description": "Agent only. Search any customer order by `draft_id` or `order_number`. Do not use `/api/admin/orders/search`."
+      },
+      "response": []
+    },
+    {
+      "name": "Agent — Update current location",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{agent_token}}", "type": "string" }]
+        },
+        "method": "PATCH",
+        "header": [
+          { "key": "Accept", "value": "application/json" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"current_location\": \"Terminal 2, Gate 8\"\n}"
+        },
+        "url": "{{base_url}}/agent/location",
+        "description": "Agent only. Same as PATCH /me/agent-location. Updates `current_location`."
+      },
+      "response": []
+    }
+  ]
+}
