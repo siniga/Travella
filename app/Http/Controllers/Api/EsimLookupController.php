@@ -5,11 +5,15 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Esim;
 use App\Models\UserEsim;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class EsimLookupController extends Controller
 {
+    /** ICCIDs in inventory share a long prefix; matching starts at the last 2 digits. */
+    private const MIN_SUFFIX_LENGTH = 2;
+
     /**
      * Autocomplete: match ICCID by the last digits the user is typing.
      *
@@ -21,22 +25,21 @@ class EsimLookupController extends Controller
             (string) ($request->query('iccid') ?? $request->query('q') ?? '')
         );
 
-        $minLength = 4;
-
         if ($suffix === '') {
             return response()->json([
                 'success' => false,
                 'message' => 'Provide iccid or q query parameter (last digits of the ICCID).',
-                'min_length' => $minLength,
+                'min_length' => self::MIN_SUFFIX_LENGTH,
                 'suggestions' => [],
             ], 422);
         }
 
-        if (strlen($suffix) < $minLength) {
+        if (strlen($suffix) < self::MIN_SUFFIX_LENGTH) {
             return response()->json([
                 'success' => true,
                 'query' => $suffix,
-                'min_length' => $minLength,
+                'min_length' => self::MIN_SUFFIX_LENGTH,
+                'message' => 'Type at least '.self::MIN_SUFFIX_LENGTH.' digits from the end of the ICCID.',
                 'suggestions' => [],
             ]);
         }
@@ -45,32 +48,9 @@ class EsimLookupController extends Controller
         $simType = strtolower((string) $request->query('sim_type', Esim::SIM_TYPE_PHYSICAL));
         $availableOnly = $request->boolean('available_only');
 
-        $escaped = $this->escapeLike($suffix);
-        $likeSuffix = '%'.$escaped;
-        $likePrefix = $escaped.'%';
-        $likeContains = '%'.$escaped.'%';
-
         $query = Esim::query()
             ->whereNotNull('iccid')
-            ->where(function ($q) use ($suffix, $likeSuffix, $likePrefix, $likeContains) {
-                $q->where('iccid', 'like', $likeSuffix)
-                    ->orWhere('iccid', 'like', $likePrefix)
-                    ->orWhere('iccid', $suffix);
-
-                // Longer input is often a full ICCID scan — allow substring match too.
-                if (strlen($suffix) >= 10) {
-                    $q->orWhere('iccid', 'like', $likeContains);
-                }
-
-                // Agents sometimes type the phone number on the card, not ICCID.
-                $q->orWhere(function ($msisdnQ) use ($likeSuffix, $likePrefix) {
-                    $msisdnQ->whereNotNull('msisdn')
-                        ->where(function ($inner) use ($likeSuffix, $likePrefix) {
-                            $inner->where('msisdn', 'like', $likeSuffix)
-                                ->orWhere('msisdn', 'like', $likePrefix);
-                        });
-                });
-            })
+            ->where(fn (Builder $q) => $this->applySuffixMatch($q, $suffix))
             ->orderBy('iccid');
 
         if (in_array($simType, [Esim::SIM_TYPE_PHYSICAL, Esim::SIM_TYPE_ESIM], true)) {
@@ -93,10 +73,13 @@ class EsimLookupController extends Controller
             ->pluck('esim_id')
             ->flip();
 
+        $suffixLen = strlen($suffix);
+
         $suggestions = $esims->map(fn (Esim $esim) => [
             'id' => $esim->id,
             'iccid' => $esim->iccid,
-            'iccid_suffix' => $esim->iccid ? substr($esim->iccid, -strlen($suffix)) : null,
+            'iccid_suffix' => $esim->iccid ? substr($esim->iccid, -$suffixLen) : null,
+            'iccid_last_two' => $esim->iccid ? substr($esim->iccid, -2) : null,
             'msisdn' => $esim->msisdn,
             'sim_type' => $esim->sim_type,
             'status' => $esim->status,
@@ -109,7 +92,8 @@ class EsimLookupController extends Controller
         return response()->json([
             'success' => true,
             'query' => $suffix,
-            'min_length' => $minLength,
+            'min_length' => self::MIN_SUFFIX_LENGTH,
+            'match_mode' => 'iccid_suffix',
             'count' => $suggestions->count(),
             'assigned_matches_excluded' => $assignedExcluded,
             'hint' => $assignedExcluded > 0
@@ -121,30 +105,9 @@ class EsimLookupController extends Controller
 
     private function matchingCount(string $suffix, string $simType, bool $assignedOnly): int
     {
-        $escaped = $this->escapeLike($suffix);
-        $likeSuffix = '%'.$escaped;
-        $likePrefix = $escaped.'%';
-        $likeContains = '%'.$escaped.'%';
-
         $query = Esim::query()
             ->whereNotNull('iccid')
-            ->where(function ($q) use ($suffix, $likeSuffix, $likePrefix, $likeContains) {
-                $q->where('iccid', 'like', $likeSuffix)
-                    ->orWhere('iccid', 'like', $likePrefix)
-                    ->orWhere('iccid', $suffix);
-
-                if (strlen($suffix) >= 10) {
-                    $q->orWhere('iccid', 'like', $likeContains);
-                }
-
-                $q->orWhere(function ($msisdnQ) use ($likeSuffix, $likePrefix) {
-                    $msisdnQ->whereNotNull('msisdn')
-                        ->where(function ($inner) use ($likeSuffix, $likePrefix) {
-                            $inner->where('msisdn', 'like', $likeSuffix)
-                                ->orWhere('msisdn', 'like', $likePrefix);
-                        });
-                });
-            });
+            ->where(fn (Builder $q) => $this->applySuffixMatch($q, $suffix));
 
         if (in_array($simType, [Esim::SIM_TYPE_PHYSICAL, Esim::SIM_TYPE_ESIM], true)) {
             $query->where('sim_type', $simType);
@@ -155,6 +118,24 @@ class EsimLookupController extends Controller
         }
 
         return $query->count();
+    }
+
+    /**
+     * Match on the trailing digits of ICCID (cards differ mainly in the last 2 digits).
+     * Full ICCID scans also match exactly.
+     */
+    private function applySuffixMatch(Builder $query, string $suffix): void
+    {
+        $escaped = $this->escapeLike($suffix);
+        $likeSuffix = '%'.$escaped;
+
+        $query->where(function (Builder $q) use ($suffix, $likeSuffix) {
+            $q->where('iccid', 'like', $likeSuffix);
+
+            if (strlen($suffix) >= 15) {
+                $q->orWhere('iccid', $suffix);
+            }
+        });
     }
 
     private function normalizeIccidSuffix(string $value): string

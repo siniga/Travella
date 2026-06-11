@@ -171,16 +171,16 @@
         "method": "GET",
         "header": [{ "key": "Accept", "value": "application/json" }],
         "url": {
-          "raw": "{{base_url}}/agent/esims/search?iccid=0470&sim_type=physical",
+          "raw": "{{base_url}}/agent/esims/search?iccid=88&sim_type=physical",
           "host": ["{{base_url}}"],
           "path": ["agent", "esims", "search"],
           "query": [
-            { "key": "iccid", "value": "0470" },
+            { "key": "iccid", "value": "88" },
             { "key": "sim_type", "value": "physical" },
             { "key": "available_only", "value": "1", "disabled": true }
           ]
         },
-        "description": "Type last 4+ digits of ICCID **or** MSISDN, or scan/type full ICCID. Matches suffix, prefix, or full number. Use `available_only=1` to hide already-assigned SIMs (may return empty with `assigned_matches_excluded` + hint). Unassigned seeded cards end in **0470** or **0496**."
+        "description": "Type the **last 2+ digits** of the ICCID (inventory cards differ mainly in the last 2 digits). Examples: `88` → …0488, `70` → …0470, `04` → …0504. Add more digits to narrow results. Full ICCID scan also works."
       },
       "response": []
     },
