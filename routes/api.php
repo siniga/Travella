@@ -19,7 +19,9 @@ use App\Http\Controllers\Api\UserEsimController;
 use App\Http\Controllers\Api\AdminUserEsimController;
 use App\Http\Controllers\Admin\AdminDashboard;
 use App\Http\Controllers\Admin\ServiceProviderSimsController;
-use App\Http\Controllers\Admin\EsimImportController;
+use App\Http\Controllers\Api\Admin\EsimController as AdminEsimController;
+use App\Http\Controllers\Api\Admin\EsimImportBatchController;
+use App\Http\Controllers\Api\Admin\EsimImportItemController;
 use App\Http\Controllers\Admin\InventoryController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\AgentController;
@@ -130,11 +132,19 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
   Route::get('/dashboard/esims-issued', [AdminDashboard::class, 'esimsIssued']);
   Route::get('/dashboard/esim-activities', [AdminDashboard::class, 'esimIssuedActivities']);
 
-  // eSIM PDF import (admin frontend)
-  Route::post('/esims/import', [EsimImportController::class, 'import']);
-  Route::get('/esims', [EsimImportController::class, 'index']);
-  Route::get('/esims/{id}/qr', [EsimImportController::class, 'qr'])->whereNumber('id');
-  Route::get('/esims/{id}', [EsimImportController::class, 'show'])->whereNumber('id');
+  // eSIM batch import (one page/item at a time — admin frontend)
+  Route::post('/esim-import-batches', [EsimImportBatchController::class, 'store']);
+  Route::get('/esim-import-batches/{batch}', [EsimImportBatchController::class, 'show']);
+  Route::post('/esim-import-batches/{batch}/items', [EsimImportBatchController::class, 'storeItem']);
+  Route::post('/esim-import-batches/{batch}/finish', [EsimImportBatchController::class, 'finish']);
+  Route::post('/esim-import-items/{item}/retry', [EsimImportItemController::class, 'retry']);
+
+  // Imported eSIM inventory (admin)
+  Route::get('/esims', [AdminEsimController::class, 'index']);
+  Route::get('/esims/{esim}/qr', [AdminEsimController::class, 'qr'])->whereNumber('esim');
+
+  // DEPRECATED: bulk PDF import — use esim-import-batches instead
+  // Route::post('/esims/import', [EsimImportController::class, 'import']);
 
   // Service provider SIM inventory (local DB)
   Route::get('/service-providers/{provider}/sims', [ServiceProviderSimsController::class, 'index']);

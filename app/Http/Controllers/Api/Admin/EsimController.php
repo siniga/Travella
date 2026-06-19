@@ -1,56 +1,22 @@
 <?php
 
-namespace App\Http\Controllers\Admin;
+namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Esim;
-use App\Services\EsimImportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-class EsimImportController extends Controller
+class EsimController extends Controller
 {
-    public function __construct(
-        private readonly EsimImportService $importService,
-    ) {
-    }
-
-    public function import(Request $request): JsonResponse
-    {
-        $validated = $request->validate([
-            'file' => ['required_without:pdf', 'nullable', 'file', 'mimes:pdf', 'max:51200'],
-            'pdf' => ['required_without:file', 'nullable', 'file', 'mimes:pdf', 'max:51200'],
-        ]);
-
-        $upload = $validated['file'] ?? $validated['pdf'];
-
-        try {
-            $summary = $this->importService->importFromPdf($upload);
-        } catch (\Throwable $e) {
-            Log::error('eSIM PDF import failed', ['error' => $e->getMessage()]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to process PDF import.',
-                'error' => $e->getMessage(),
-            ], 422);
-        }
-
-        return response()->json([
-            'success' => true,
-            'message' => 'PDF import completed.',
-            'data' => $summary,
-        ]);
-    }
-
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'phone_number' => ['nullable', 'string', 'max:30'],
             'status' => ['nullable', 'string', 'in:available,sold,used'],
+            'import_batch_id' => ['nullable', 'integer', 'exists:esim_import_batches,id'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
 
@@ -70,8 +36,12 @@ class EsimImportController extends Controller
             $query->where('sale_status', $validated['status']);
         }
 
+        if (! empty($validated['import_batch_id'])) {
+            $query->where('import_batch_id', $validated['import_batch_id']);
+        }
+
         $paginator = $query->paginate($validated['per_page'] ?? 15);
-        $paginator->getCollection()->transform(fn (Esim $esim) => $this->formatEsim($esim));
+        $paginator->getCollection()->transform(fn (Esim $esim) => $this->formatListEsim($esim));
 
         return response()->json([
             'success' => true,
@@ -79,23 +49,14 @@ class EsimImportController extends Controller
         ]);
     }
 
-    public function show(int $id): JsonResponse
+    public function qr(Esim $esim): StreamedResponse|JsonResponse
     {
-        $esim = Esim::query()
-            ->where('sim_type', Esim::SIM_TYPE_ESIM)
-            ->findOrFail($id);
-
-        return response()->json([
-            'success' => true,
-            'data' => $this->formatEsim($esim, detailed: true),
-        ]);
-    }
-
-    public function qr(int $id): StreamedResponse|JsonResponse
-    {
-        $esim = Esim::query()
-            ->where('sim_type', Esim::SIM_TYPE_ESIM)
-            ->findOrFail($id);
+        if ($esim->sim_type !== Esim::SIM_TYPE_ESIM) {
+            return response()->json([
+                'success' => false,
+                'message' => 'QR code is only available for imported eSIM records.',
+            ], 404);
+        }
 
         if (! $esim->qr_code_path || ! Storage::disk('local')->exists($esim->qr_code_path)) {
             return response()->json([
@@ -121,26 +82,17 @@ class EsimImportController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function formatEsim(Esim $esim, bool $detailed = false): array
+    private function formatListEsim(Esim $esim): array
     {
-        $payload = [
+        return [
             'id' => $esim->id,
             'phone_number' => $esim->msisdn,
             'iccid' => $esim->iccid,
             'status' => $esim->sale_status ?? Esim::SALE_STATUS_AVAILABLE,
-            'inventory_status' => $esim->status,
+            'import_batch_id' => $esim->import_batch_id,
             'has_qr_code' => (bool) $esim->qr_code_path,
             'created_at' => $esim->created_at,
             'updated_at' => $esim->updated_at,
         ];
-
-        if ($detailed) {
-            $payload['qr_code_data'] = $esim->qr_code_data;
-            $payload['qr_url'] = $esim->qr_code_path
-                ? url('/api/admin/esims/'.$esim->id.'/qr')
-                : null;
-        }
-
-        return $payload;
     }
 }

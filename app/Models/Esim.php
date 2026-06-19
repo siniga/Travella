@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Esim extends Model
 {
@@ -23,6 +24,7 @@ class Esim extends Model
     protected $fillable = [
         'sim_id',
         'msisdn',
+        'import_batch_id',
         'network_id',
         'iccid',
         'imsi',
@@ -39,9 +41,30 @@ class Esim extends Model
 
     protected $casts = [
         'network_id' => 'integer',
+        'import_batch_id' => 'integer',
         'balances' => 'array',
         'balance_fetched_at' => 'datetime',
     ];
+
+    public function importBatch(): BelongsTo
+    {
+        return $this->belongsTo(EsimImportBatch::class, 'import_batch_id');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function toImportApiArray(): array
+    {
+        return [
+            'id' => $this->id,
+            'phone_number' => $this->msisdn,
+            'iccid' => $this->iccid,
+            'status' => $this->sale_status ?? self::SALE_STATUS_AVAILABLE,
+            'import_batch_id' => $this->import_batch_id,
+            'has_qr_code' => (bool) $this->qr_code_path,
+        ];
+    }
 
     public static function normalizeMsisdn(string $msisdn): string
     {
